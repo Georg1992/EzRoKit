@@ -15,3 +15,11 @@ type InputSession interface {
 	// key events from other goroutines cannot interleave.
 	MouseClick(hold time.Duration) error
 }
+
+// ClickerCycleSession is implemented by sessions that can keep the clicker's
+// key -> mouse sequence under one wire lock. The optional interface preserves
+// lightweight test sessions and non-VIIPER implementations; the real session
+// implements it so other runners cannot interleave between the two actions.
+type ClickerCycleSession interface {
+	ClickerCycle(vk int32, keyHold, mouseHold time.Duration) error
+}

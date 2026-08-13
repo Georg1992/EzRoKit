@@ -745,12 +745,12 @@ func (a *guiApp) guiLog(fn func(string)) func(string) {
 // handler BEFORE assigning the key to the new slot so a key can only
 // ever be bound in one place at a time.
 func (a *guiApp) unsetKeyBinding(vk int32) {
-	// Check clicker slots (one key each).
+	// Check clicker binds (each may hold multiple independent keys).
 	for i := 0; i < a.clicker.visibleCount; i++ {
-		if a.clicker.triggerVK[i] == vk {
-			a.clicker.triggerVK[i] = 0
+		if a.clicker.removeKey(i, vk) {
 			a.updateClickerKeyLabel(i)
 			a.appendLog(fmt.Sprintf("Key %s removed from %s (reassigned)", runner.KeyName(vk), clickerTitle(i)))
+			a.setClickerConfigEnabled(a.isViiperReady())
 			a.syncRunnerSettings()
 			return
 		}

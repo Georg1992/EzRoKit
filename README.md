@@ -75,12 +75,17 @@ Status indicator: red **OFF**, green **ON**.
 
 ### Click loop
 
-While the trigger key is held:
+While the trigger key is held, each bind repeats one of these exact flows:
 
-1. Virtual key down
-2. Delay (ms) — ends early if trigger released, but cycle still finishes
-3. Virtual mouse down → key up → mouse up
-4. Repeat until trigger released; current cycle always completes
+- **Mouse enabled:** virtual key click (held ~20 ms) → virtual mouse click
+  (short, hardened hold) → sleep for **Delay ms**
+- **Mouse disabled:** virtual key click (held ~20 ms) → sleep for **Delay ms**
+
+The Delay setting is always after the final action. Each assigned key has its
+own clicker state. If multiple keys are held, the first key observed pressed
+gets priority; the others wait without firing until the active key is
+released, then the earliest waiting key takes over. A failed key write cannot
+produce a mouse-only click.
 
 Default delay: **50 ms**. If a game misses clicks, try **50–100 ms**.
 

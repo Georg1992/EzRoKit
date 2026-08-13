@@ -130,14 +130,53 @@ func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
 	return keyUpLocked(s.keyStream)
 }
 
+// ClickerCycle emits key click -> mouse click while holding the wire lock for
+// both actions. This prevents another runner from inserting an input event
+// between the key and mouse portions of the clicker's required flow.
+func (s *ViiperSession) ClickerCycle(vk int32, keyHold, mouseHold time.Duration) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := keyDownLocked(s.keyStream, vk); err != nil {
+		return err
+	}
+	if err := keyUpAfterLocked(s.keyStream, keyHold); err != nil {
+		return err
+	}
+	return mouseClickLocked(s.mouseStream, mouseHold)
+}
+
 func (s *ViiperSession) MouseClick(hold time.Duration) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := mouseDownLocked(s.mouseStream); err != nil {
+	return mouseClickLocked(s.mouseStream, hold)
+}
+
+// mouseClickLocked sends the button-down state twice before releasing it.
+// VIIPER's mouse device intentionally coalesces pending states in a one-entry
+// channel; without the second down report, a down followed quickly by up can
+// be replaced before usbip-win2 polls the endpoint. Repeating the identical
+// down state does not create a second click, but guarantees the pressed state
+// spans at least two HID polling opportunities.
+func mouseClickLocked(stream *viiperclient.DeviceStream, hold time.Duration) error {
+	if err := mouseDownLocked(stream); err != nil {
 		return err
 	}
-	time.Sleep(hold)
-	return mouseUpLocked(s.mouseStream)
+
+	minimumHold := 2 * timing.HIDPollInterval
+	if hold < minimumHold {
+		hold = minimumHold
+	}
+	firstHalf := hold / 2
+	time.Sleep(firstHalf)
+
+	if err := mouseDownLocked(stream); err != nil {
+		// Best effort release if the retransmission fails, avoiding a stuck
+		// virtual button while still reporting the original write error.
+		_ = mouseUpLocked(stream)
+		return err
+	}
+	time.Sleep(hold - firstHalf)
+	return mouseUpLocked(stream)
 }
 
 func keyDownLocked(stream *viiperclient.DeviceStream, vk int32) error {
@@ -152,6 +191,11 @@ func keyDownLocked(stream *viiperclient.DeviceStream, vk int32) error {
 func keyUpLocked(stream *viiperclient.DeviceStream) error {
 	release := keyboard.Release()
 	return stream.WriteBinary(&release)
+}
+
+func keyUpAfterLocked(stream *viiperclient.DeviceStream, hold time.Duration) error {
+	time.Sleep(hold)
+	return keyUpLocked(stream)
 }
 
 func mouseDownLocked(stream *viiperclient.DeviceStream) error {

@@ -15,12 +15,19 @@ const (
 	MinPollWait       = time.Millisecond
 	CaptureRetryDelay = 50 * time.Millisecond
 	KeyTapHold        = 1 * time.Millisecond
-	// MouseClickHold is the LMB press duration for clicker mouse clicks.
-	// Kept separate from the clicker inter-fire DelayMs.
-	MouseClickHold = KeyTapHold
-	KeyBindTimeout = 5 * time.Second
-	SessionCloseWait = 10 * time.Second
+	KeyBindTimeout    = 5 * time.Second
+	SessionCloseWait  = 10 * time.Second
 )
+
+// HIDPollInterval is the USB interrupt polling interval (BInterval) of the
+// VIIPER keyboard and mouse endpoints. Each device keeps a single pending
+// input report — a newer report overwrites an older one that the host has
+// not polled yet. Any key/button hold shorter than HIDPollInterval can
+// therefore be silently dropped (down overwritten by up) before the game
+// ever sees it. Any hold strictly longer than this interval guarantees the
+// down-report is transmitted (the clicker uses 4× as margin so the press
+// also spans a typical game frame).
+const HIDPollInterval = 5 * time.Millisecond
 
 // Virtual-key codes for the start/stop toggle watcher.
 const (
