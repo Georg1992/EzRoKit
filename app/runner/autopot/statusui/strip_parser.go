@@ -769,12 +769,13 @@ func maskEqualFraction(a, b [][]bool) float64 {
 	return float64(equal) / float64(total)
 }
 
-// hpSpRegex matches "HP.<d>/<d>[|]SP.<d>/<d>" with optional dot
-// after HP/SP and an optional pipe separator. The |\? captures
-// strips / "|" variants.
+// hpSpRegex matches the complete "HP.<d>/<d>[|]SP.<d>/<d>" string with
+// optional dots after HP/SP and an optional pipe separator. Anchoring the
+// expression prevents unrelated OCR noise before or after a valid-looking
+// substring from being accepted.
 //
 // Group indices: 1=hp 2=hpMax 3=sp 4=spMax.
-var hpSpRegex = regexp.MustCompile(`HP\.?(\d+)/(\d+)\|?SP\.?(\d+)/(\d+)`)
+var hpSpRegex = regexp.MustCompile(`^HP\.?(\d+)/(\d+)\|?SP\.?(\d+)/(\d+)$`)
 
 // parseText applies the HP/SP regex to a candidate text. If
 // the regex misses, returns an error; otherwise returns

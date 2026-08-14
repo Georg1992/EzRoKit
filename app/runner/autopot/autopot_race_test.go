@@ -38,14 +38,14 @@ func TestAutoPotRunnerStress(t *testing.T) {
 	sess := &mockSession{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		SPThreshold: 50,
-		HPKeyVK:     'Q',
-		SPKeyVK:     'W',
-		HPEnabled:   true,
-		SPEnabled:   true,
-		Log:         func(string) {},
+			Session:     sess,
+			HPThreshold: 50,
+			SPThreshold: 50,
+			HPKeyVK:     'Q',
+			SPKeyVK:     'W',
+			HPEnabled:   true,
+			SPEnabled:   true,
+			Log:         func(string) {},
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -67,14 +67,14 @@ func TestAutoPotRunnerStress(t *testing.T) {
 				default:
 					ap.UpdateSettings(AutoPotConfig{
 						Core: CoreConfig{
-						Session:     sess,
-						HPThreshold: 40 + n%40,
-						SPThreshold: 40 + n%40,
-						HPKeyVK:     'Q',
-						SPKeyVK:     'W',
-						HPEnabled:   n%2 == 0,
-						SPEnabled:   true,
-						Log:         func(string) {},
+							Session:     sess,
+							HPThreshold: 40 + n%40,
+							SPThreshold: 40 + n%40,
+							HPKeyVK:     'Q',
+							SPKeyVK:     'W',
+							HPEnabled:   n%2 == 0,
+							SPEnabled:   true,
+							Log:         func(string) {},
 						},
 					})
 					n++
@@ -157,11 +157,11 @@ func TestAutoPotHealUntilErrorAborts(t *testing.T) {
 	sess := &mockSession{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		HPKeyVK:     'Q',
-		HPEnabled:   true,
-		Log:         func(string) {},
+			Session:     sess,
+			HPThreshold: 50,
+			HPKeyVK:     'Q',
+			HPEnabled:   true,
+			Log:         func(string) {},
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -172,7 +172,7 @@ func TestAutoPotHealUntilErrorAborts(t *testing.T) {
 	reader := &mockFlakyReader{hpValue: 30, failNext: 1} // fail on first call
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 	elapsed := time.Since(start)
 
 	// healUntil should return quickly — the reader fails on first call.
@@ -198,11 +198,11 @@ func TestAutoPotHealUntilSucceeds(t *testing.T) {
 	// cross above threshold and return.
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		HPKeyVK:     'Q',
-		HPEnabled:   true,
-		Log:         func(string) {},
+			Session:     sess,
+			HPThreshold: 50,
+			HPKeyVK:     'Q',
+			HPEnabled:   true,
+			Log:         func(string) {},
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -216,7 +216,7 @@ func TestAutoPotHealUntilSucceeds(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 	elapsed := time.Since(start)
 
 	if elapsed > 500*time.Millisecond {
@@ -273,14 +273,14 @@ func TestAutoPotRunnerRunWithMockReader(t *testing.T) {
 	sess := &mockSession{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		SPThreshold: 50,
-		HPKeyVK:     'Q',
-		SPKeyVK:     'W',
-		HPEnabled:   true,
-		SPEnabled:   true,
-		Log:         func(string) {},
+			Session:     sess,
+			HPThreshold: 50,
+			SPThreshold: 50,
+			HPKeyVK:     'Q',
+			SPKeyVK:     'W',
+			HPEnabled:   true,
+			SPEnabled:   true,
+			Log:         func(string) {},
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -335,14 +335,14 @@ func TestAutoPotRunnerRunWithMockReader(t *testing.T) {
 				default:
 					ap.UpdateSettings(AutoPotConfig{
 						Core: CoreConfig{
-						Session:     sess,
-						HPThreshold: 10 + n%80,
-						SPThreshold: 10 + n%80,
-						HPKeyVK:     'Q',
-						SPKeyVK:     'W',
-						HPEnabled:   n%3 != 0,
-						SPEnabled:   n%3 != 1,
-						Log:         func(string) {},
+							Session:     sess,
+							HPThreshold: 10 + n%80,
+							SPThreshold: 10 + n%80,
+							HPKeyVK:     'Q',
+							SPKeyVK:     'W',
+							HPEnabled:   n%3 != 0,
+							SPEnabled:   n%3 != 1,
+							Log:         func(string) {},
 						},
 					})
 					n++

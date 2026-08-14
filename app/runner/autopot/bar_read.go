@@ -29,9 +29,8 @@ func ReadMappedBars(img image.Image, bars MappedBars) (hp BarRead, sp BarRead) {
 
 // ReadHPFill reads the fill percentage of an HP bar from the image.
 // Returns a BarRead with the fill percentage and pixel counts.
-// When no fill pixels are found (player is dead, bar is empty), returns
-// Found=true with Percent=0 so the stabiliser can accumulate low readings
-// and trigger the dead/heal path.
+// When no fill pixels are found (the bar is empty), returns Found=true
+// with Percent=0 so the stabiliser can accumulate low readings and heal.
 func ReadHPFill(img image.Image, hp Rect) BarRead {
 	if hp.W < 1 || hp.H < 1 {
 		return BarRead{Found: false}

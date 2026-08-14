@@ -1,6 +1,7 @@
 package statusui
 
 import (
+	"errors"
 	"image"
 	"sync"
 	"time"
@@ -86,6 +87,9 @@ func (p *StripPoller) StripRect() image.Rectangle {
 // timer. Returns an error if the panel is not found or cannot be
 // verified — the caller should retry on the next cycle.
 func (p *StripPoller) Validate(screen image.Image) error {
+	if p == nil || p.pipeline == nil {
+		return errors.New("statusui: poller is not initialized")
+	}
 	rec, err := p.pipeline.RecognizeScreen(screen)
 	if err != nil {
 		return err
@@ -104,6 +108,9 @@ func (p *StripPoller) Validate(screen image.Image) error {
 // previous successful call so repeated calls with the same values are
 // significantly faster.
 func (p *StripPoller) Parse(strip image.Image) (ParsedStatus, error) {
+	if p == nil || p.pipeline == nil {
+		return ParsedStatus{}, errors.New("statusui: poller is not initialized")
+	}
 	res, err := p.pipeline.ParseStrip(strip)
 	return res.ParsedStatus, err
 }

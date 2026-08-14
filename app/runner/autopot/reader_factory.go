@@ -5,11 +5,11 @@ import (
 )
 
 // ReaderFactory constructs BarReader instances based on the provided config.
-// It encapsulates the decision tree for choosing between address, OCR, and
-// pixel readers, making the system open for extension (new reader types can
-// be added without modifying the orchestrator).
+// It owns reader construction so the orchestrator depends on the BarReader
+// contract and readerController rather than platform-specific setup details.
 type ReaderFactory struct {
 	settings func() AutoPotConfig // live config for runtime threshold lookups
+	capture  screenCapturer
 	hpStab   *BarStabilizer
 	spStab   *BarStabilizer
 }
@@ -18,8 +18,19 @@ type ReaderFactory struct {
 // The settings function provides live access to the config (thresholds can change
 // via UpdateSettings mid-run).
 func NewReaderFactory(settings func() AutoPotConfig, hpStab, spStab *BarStabilizer) *ReaderFactory {
+	return NewReaderFactoryWithCapture(settings, hpStab, spStab, defaultScreenCapturer())
+}
+
+// NewReaderFactoryWithCapture creates a factory with an explicit screen
+// source. Production callers normally use NewReaderFactory; tests and other
+// hosts can provide deterministic frames without replacing package globals.
+func NewReaderFactoryWithCapture(settings func() AutoPotConfig, hpStab, spStab *BarStabilizer, capture screenCapturer) *ReaderFactory {
+	if capture == nil {
+		capture = defaultScreenCapturer()
+	}
 	return &ReaderFactory{
 		settings: settings,
+		capture:  capture,
 		hpStab:   hpStab,
 		spStab:   spStab,
 	}
@@ -65,6 +76,7 @@ func (f *ReaderFactory) buildVisualReaders(cfg AutoPotConfig) (primary BarReader
 
 func (f *ReaderFactory) buildPixelReader(cfg AutoPotConfig) *pixelBarReader {
 	return &pixelBarReader{
+		capture:  f.capture,
 		hpStab:   f.hpStab,
 		spStab:   f.spStab,
 		log:      cfg.Core.Log,
@@ -78,6 +90,7 @@ func (f *ReaderFactory) tryBuildOCRReader(cfg AutoPotConfig) (*statusUIReader, b
 		return nil, false
 	}
 	return &statusUIReader{
+		capture:      f.capture,
 		poller:       statusui.NewStripPoller(pipeline),
 		onModeChange: cfg.Core.OnStatusUIMode,
 		onParsed:     cfg.Core.OnStatusParsed,

@@ -162,7 +162,10 @@ func (p *Pipeline) RecognizeScreen(screen image.Image) (ScreenRecognition, error
 
 	stripRect := p.locator.LocateStatusTextLine(panelRect)
 	strip := ExtractROI(screen, stripRect)
-	if strip == nil {
+	if strip == nil || strip.Bounds().Dx() != p.locator.Width || strip.Bounds().Dy() != p.locator.Height {
+		// Never parse a clipped strip: a partial HP/SP line can still
+		// contain a regex-looking substring and produce a plausible but
+		// incorrect value. Treat it as an acquisition failure instead.
 		return out, ErrStripNotFound
 	}
 	out.StripRect = stripRect

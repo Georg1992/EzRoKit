@@ -2,6 +2,7 @@ package statusui
 
 import (
 	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -82,9 +83,9 @@ func TestFindStatusPanel_TopLeftOnDriftFixtures(t *testing.T) {
 				t.Errorf("panel rect %v has dimensions %dx%d, expected %dx%d (template size)",
 					rect, rect.Dx(), rect.Dy(), template.Bounds().Dx(), template.Bounds().Dy())
 			}
-		if score > 0.15 {
-			t.Errorf("panel score %.4f is too high (expected < 0.15 for a real match)", score)
-		}
+			if score > 0.15 {
+				t.Errorf("panel score %.4f is too high (expected < 0.15 for a real match)", score)
+			}
 		})
 	}
 }
@@ -137,6 +138,41 @@ func TestFindStatusPanel_EmptyImageDoesNotPanic(t *testing.T) {
 // sensible location + score. This stands in for any case where the
 // real panel is not in the default 400×200 top-left corner — the
 // search must continue, not silently miss it.
+func TestPrecomputeImageGrayscale_HonorsNonZeroBounds(t *testing.T) {
+	img := image.NewRGBA(image.Rect(10, 20, 12, 22))
+	img.SetRGBA(10, 20, color.RGBA{R: 20, G: 40, B: 80, A: 255})
+	img.SetRGBA(11, 21, color.RGBA{R: 200, G: 100, B: 30, A: 255})
+
+	gray, ok := precomputeImageGrayscale(img, img.Bounds())
+	if !ok {
+		t.Fatal("expected RGBA fast path")
+	}
+	if got, want := gray[0][0], luma8(img.At(10, 20)); got != want {
+		t.Errorf("gray[0][0] = %d, want %d", got, want)
+	}
+	if got, want := gray[1][1], luma8(img.At(11, 21)); got != want {
+		t.Errorf("gray[1][1] = %d, want %d", got, want)
+	}
+}
+
+func TestSadOnGrayscalePartial_HonorsNonZeroBounds(t *testing.T) {
+	img := image.NewRGBA(image.Rect(10, 20, 12, 22))
+	img.SetRGBA(10, 20, color.RGBA{R: 20, G: 40, B: 80, A: 255})
+	img.SetRGBA(11, 20, color.RGBA{R: 200, G: 100, B: 30, A: 255})
+	img.SetRGBA(10, 21, color.RGBA{R: 50, G: 60, B: 70, A: 255})
+	img.SetRGBA(11, 21, color.RGBA{R: 90, G: 100, B: 110, A: 255})
+
+	imgGray, ok := precomputeImageGrayscale(img, img.Bounds())
+	if !ok {
+		t.Fatal("expected RGBA fast path")
+	}
+	tplGray := imgGray
+	got := sadOnGrayscalePartial(imgGray, tplGray, img.Bounds(), 10, 20, 0, 0, 2, 2, 1e9)
+	if got != 0 {
+		t.Fatalf("SAD for identical non-zero-bounded image = %v, want 0", got)
+	}
+}
+
 func TestFindStatusPanel_TopLeftMissContinuesToFullImageScan(t *testing.T) {
 	template := loadPNG(t, templatePath(t))
 	img := loadPNG(t, testdataPath(t, "status_bar_drift1.png"))

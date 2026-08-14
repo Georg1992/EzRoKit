@@ -16,7 +16,6 @@ const (
 	StatusFound    BarReadStatus = iota // valid HP/SP data
 	StatusNotFound                      // bars/panel not found on screen
 	StatusInvalid                       // transient error (capture fail, etc.)
-	StatusDead                          // character is dead (HP=1)
 )
 
 // BarReadResult is the unified HP/SP reading produced by any BarReader.
@@ -24,15 +23,15 @@ const (
 // bar is below its threshold (for the pixel-bar reader this requires
 // PotConfirmReads=3 consecutive low reads via the stabiliser; for the
 // statusUI reader a single low parse suffices). Status discriminates the
-// semantic state (found, not found, invalid, dead). Err carries the
+// semantic state (found, not found, invalid). Err carries the
 // underlying error for logging when Status != StatusFound.
 type BarReadResult struct {
 	HP     float64
 	SP     float64
-	HPLow bool
-	SPLow bool
+	HPLow  bool
+	SPLow  bool
 	Status BarReadStatus
-	Err   error
+	Err    error
 }
 
 // BarReader produces HP/SP percentage readings. Two implementations exist:
@@ -50,10 +49,11 @@ type BarReader interface {
 // pixel-based HP/SP reading. Tracks the last known bar position in
 // screen coordinates so the search ROI can follow camera drift.
 type pixelBarReader struct {
-	hpStab  *BarStabilizer
-	spStab  *BarStabilizer
-	log     func(string)
-	lastLog time.Time
+	capture  screenCapturer
+	hpStab   *BarStabilizer
+	spStab   *BarStabilizer
+	log      func(string)
+	lastLog  time.Time
 	onParsed func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
 
 	// lastScreenRect is the last known HP bar position in screen
@@ -73,7 +73,11 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 		return BarReadResult{Status: StatusInvalid, Err: ctx.Err()}
 	}
 
-	sw, sh := ScreenSize()
+	capture := r.capture
+	if capture == nil {
+		capture = defaultScreenCapturer()
+	}
+	sw, sh := capture.ScreenSize()
 	var rct Rect
 	if r.lastScreenRect.W > 0 && r.lostFrames < 3 {
 		// Centre the search ROI on the last known bar position so
@@ -93,7 +97,7 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 	}
 
 	roi := rct
-	img, err := CaptureScreenRegion(rct)
+	img, err := capture.CaptureScreenRegion(rct)
 	if err != nil {
 		r.debugf("pixel: capture failed, roi %d,%d %dx%d: %v", roi.X, roi.Y, roi.W, roi.H, err)
 		return BarReadResult{Status: StatusInvalid, Err: err}
@@ -132,21 +136,13 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 		mapped.Block.X, mapped.Block.Y, mapped.Block.W, mapped.Block.H, mapped.MapScore,
 		bounds.Dx(), bounds.Dy(), roi.X, roi.Y, roi.W, roi.H)
 
-	// Dead detection: bar pair found but HP is consistently at 0%.
-	// In RO, HP=0 means dead — the minimap HP bar is empty.
-	// Return StatusDead so the main loop enters the dead-handling path
-	// (shows "[Dead]" overlay, taps HP key at 1s intervals, skips SP heal).
-	if hp.Status == BarStatusLow && hp.Percent == 0 {
-		if r.onParsed != nil {
-			r.onParsed(1, 1, int(sp.Percent), 100, 0, 0, 0, 0)
-		}
+	// A pair can be located while one fill measurement is temporarily
+	// inconsistent. Do not expose that partial snapshot to the decision
+	// layer or allow the other bar to trigger a potion from it.
+	if !hp.Found || !sp.Found {
 		return BarReadResult{
-			HP:     0,
-			SP:     sp.Percent,
-			HPLow:  false,
-			SPLow:  sp.Status == BarStatusLow,
-			Status: StatusDead,
-			Err:    fmt.Errorf("character dead (HP=0%%)"),
+			Status: StatusNotFound,
+			Err:    fmt.Errorf("pixel bar fill measurement incomplete (HP found=%t, SP found=%t)", hp.Found, sp.Found),
 		}
 	}
 
@@ -186,6 +182,7 @@ func (r *pixelBarReader) debugf(format string, args ...interface{}) {
 // The settings function provides access to live thresholds (which can change
 // via UpdateSettings mid-run) so HPLow/SPLow are computed correctly.
 type statusUIReader struct {
+	capture       screenCapturer
 	poller        *statusui.StripPoller
 	wasPanelFound bool
 	onModeChange  func(string)
@@ -197,12 +194,20 @@ type statusUIReader struct {
 func (r *statusUIReader) Name() string { return "OCR" }
 
 func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
+	if r == nil || r.poller == nil {
+		return BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("statusui reader: not initialized")}
+	}
 	if ctx.Err() != nil {
 		return BarReadResult{Status: StatusInvalid, Err: ctx.Err()}
 	}
 	if r.poller.NeedsValidation() {
 		if err := r.validate(); err != nil {
-			return BarReadResult{Status: StatusNotFound, Err: err}
+			// A scheduled full-screen validation can fail transiently
+			// (capture timing, compositor update, or a single bad frame).
+			// Retry once before abandoning OCR and switching readers.
+			if retryErr := r.validate(); retryErr != nil {
+				return BarReadResult{Status: StatusNotFound, Err: retryErr}
+			}
 		}
 	}
 	status, err := r.captureAndParse()
@@ -220,16 +225,7 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 			return BarReadResult{Status: StatusInvalid, Err: err}
 		}
 	}
-	// Always notify the overlay first so it shows HP=1 when dead.
 	r.notifyParsed(status)
-
-	// HP==1 means the character is dead in the game engine. Don't
-	// heal — return an error so the main loop retries or switches to
-	// pixel. When the character respawns (HP > 1), parsing succeeds
-	// and healing resumes.
-	if status.HP == 1 {
-		return BarReadResult{Status: StatusDead, Err: fmt.Errorf("character dead (HP=1)")}
-	}
 
 	hpPct := 0.0
 	spPct := 0.0
@@ -240,7 +236,10 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 		spPct = float64(status.SP) * 100 / float64(status.SPMax)
 	}
 
-	cfg := r.coreSettings()
+	cfg := CoreConfig{}
+	if r.coreSettings != nil {
+		cfg = r.coreSettings()
+	}
 	return BarReadResult{
 		HP:     hpPct,
 		SP:     spPct,
@@ -255,7 +254,11 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 // avoid GUI spam on repeated retries. Screen capture failures
 // are logged once then suppressed until a successful capture.
 func (r *statusUIReader) validate() error {
-	screen, err := CaptureFullScreen()
+	capture := r.capture
+	if capture == nil {
+		capture = defaultScreenCapturer()
+	}
+	screen, err := capture.CaptureFullScreen()
 	if err != nil {
 		if r.wasPanelFound && r.log != nil {
 			r.log(fmt.Sprintf("autopot statusui: screen capture failed: %v", err))
@@ -288,11 +291,18 @@ func (r *statusUIReader) validate() error {
 
 // captureAndParse captures the cached strip region and parses HP/SP values.
 func (r *statusUIReader) captureAndParse() (statusui.ParsedStatus, error) {
+	if r == nil || r.poller == nil {
+		return statusui.ParsedStatus{}, fmt.Errorf("statusui reader: not initialized")
+	}
 	strip := r.poller.StripRect()
 	if strip.Empty() {
 		return statusui.ParsedStatus{}, fmt.Errorf("strip rect not yet validated")
 	}
-	img, err := CaptureScreenRegion(Rect{
+	capture := r.capture
+	if capture == nil {
+		capture = defaultScreenCapturer()
+	}
+	img, err := capture.CaptureScreenRegion(Rect{
 		X: strip.Min.X, Y: strip.Min.Y,
 		W: strip.Dx(), H: strip.Dy(),
 	})
@@ -303,7 +313,7 @@ func (r *statusUIReader) captureAndParse() (statusui.ParsedStatus, error) {
 }
 
 func (r *statusUIReader) notifyParsed(s statusui.ParsedStatus) {
-	if r.onParsed == nil {
+	if r == nil || r.poller == nil || r.onParsed == nil {
 		return
 	}
 	panel := r.poller.PanelRect()

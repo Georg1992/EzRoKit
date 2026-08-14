@@ -16,6 +16,16 @@ func statusUIDirForPoller(t *testing.T) string {
 	return filepath.Dir(file)
 }
 
+func TestStripPoller_UninitializedReturnsErrors(t *testing.T) {
+	var poller *StripPoller
+	if err := poller.Validate(nil); err == nil {
+		t.Fatal("Validate on nil poller returned nil error")
+	}
+	if _, err := poller.Parse(nil); err == nil {
+		t.Fatal("Parse on nil poller returned nil error")
+	}
+}
+
 func TestStripPoller_AcquireThenPoll(t *testing.T) {
 	pipeline, err := NewPipeline(
 		filepath.Join(statusUIDirForPoller(t), "glyphs"), 0.70,

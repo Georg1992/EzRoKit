@@ -2,11 +2,12 @@ package autopot
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"belarus-champ-tools/runner/internal/timing"
 )
 
 // ---------------------------------------------------------------------------
@@ -53,16 +54,16 @@ func TestPotsEndedLabel(t *testing.T) {
 			want:  "SP pots ended on F2",
 		},
 		{
-			name:   "HP without key",
-			cfg:    AutoPotConfig{Core: CoreConfig{}},
-			hpBar:  true,
-			want:   "HP pots ended",
+			name:  "HP without key",
+			cfg:   AutoPotConfig{Core: CoreConfig{}},
+			hpBar: true,
+			want:  "HP pots ended",
 		},
 		{
-			name:   "SP without key",
-			cfg:    AutoPotConfig{Core: CoreConfig{}},
-			hpBar:  false,
-			want:   "SP pots ended",
+			name:  "SP without key",
+			cfg:   AutoPotConfig{Core: CoreConfig{}},
+			hpBar: false,
+			want:  "SP pots ended",
 		},
 	}
 	for _, tt := range tests {
@@ -141,17 +142,11 @@ func TestSetMode_NilCallback(t *testing.T) {
 	// Must not panic when fn is nil.
 	setMode(nil, "OCR")
 	setMode(nil, "")
-	setMode(nil, "Dead")
 }
 
 func TestSetMode_CallsCallback(t *testing.T) {
 	var got string
 	fn := func(s string) { got = s }
-
-	setMode(fn, "Dead")
-	if got != "Dead" {
-		t.Errorf("setMode(fn, 'Dead') called with %q; want %q", got, "Dead")
-	}
 
 	setMode(fn, "")
 	if got != "" {
@@ -165,8 +160,7 @@ func TestClearPotsEndedMode(t *testing.T) {
 	t.Run("clears when potsEnded=true", func(t *testing.T) {
 		var got string
 		fn := func(s string) { got = s }
-		ap := &AutoPotRunner{} // zero value is fine for this call
-		ap.clearPotsEndedMode(fn, true)
+		clearPotsEndedMode(fn, true)
 		if got != "" {
 			t.Errorf("clearPotsEndedMode(fn, true) = %q; want empty", got)
 		}
@@ -175,8 +169,7 @@ func TestClearPotsEndedMode(t *testing.T) {
 	t.Run("skips when potsEnded=false", func(t *testing.T) {
 		called := false
 		fn := func(s string) { called = true }
-		ap := &AutoPotRunner{}
-		ap.clearPotsEndedMode(fn, false)
+		clearPotsEndedMode(fn, false)
 		if called {
 			t.Error("clearPotsEndedMode(fn, false) called setMode; should not")
 		}
@@ -204,24 +197,16 @@ func (r *constantReader) ReadValues(_ context.Context) BarReadResult {
 
 func (r *constantReader) Name() string { return "constant" }
 
-// deadReader returns StatusDead on every call.
-type deadReader struct{}
-
-func (r *deadReader) ReadValues(_ context.Context) BarReadResult {
-	return BarReadResult{Status: StatusDead, Err: fmt.Errorf("character dead (HP=1)")}
-}
-
-func (r *deadReader) Name() string { return "dead" }
-
 // constantThenSpikeReader returns hpBase for N calls, then hpSpike until
 // threshold is reached (above threshold), causing healUntil to exit.
 type constantThenSpikeReader struct {
-	mu         sync.Mutex
-	callCount  int
-	hpBase     float64
-	hpSpike    float64
+	mu          sync.Mutex
+	callCount   int
+	hpBase      float64
+	hpSpike     float64
 	switchAfter int // call index after which to spike
-	threshold  float64
+	threshold   float64
+	readDelay   time.Duration // model the real visual-read cadence
 }
 
 func (r *constantThenSpikeReader) ReadValues(_ context.Context) BarReadResult {
@@ -232,7 +217,11 @@ func (r *constantThenSpikeReader) ReadValues(_ context.Context) BarReadResult {
 	if n >= r.switchAfter {
 		hp = r.hpSpike
 	}
+	delay := r.readDelay
 	r.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	return BarReadResult{
 		Status: StatusFound,
 		HP:     hp,
@@ -294,107 +283,6 @@ func (s *recordSession) TapKey(vk int32, hold time.Duration) error {
 func (s *recordSession) MouseClick(_ time.Duration) error { return nil }
 
 // ---------------------------------------------------------------------------
-// healUntil tests — dead mode.
-// ---------------------------------------------------------------------------
-
-func TestHealUntil_StatusDead_Returns(t *testing.T) {
-	// When the reader returns StatusDead, healUntil should return
-	// promptly (similar to any other StatusFound failure) because
-	// the main loop handles the dead state, not healUntil.
-	sess := &recordSession{}
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		HPKeyVK:     'Q',
-		HPEnabled:   true,
-		Log:         func(string) {},
-		},
-	}
-	ap := NewAutoPot(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	reader := &deadReader{}
-
-	start := time.Now()
-	ap.healUntil(ctx, reader, true)
-	elapsed := time.Since(start)
-
-	// Should return quickly — StatusDead is not StatusFound.
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("healUntil took %v to abort on StatusDead (expected < 200ms)",
-			elapsed.Round(time.Millisecond))
-	}
-	if taps := sess.tapCount.Load(); taps > 0 {
-		t.Errorf("healUntil pressed %d keys despite StatusDead", taps)
-	}
-	t.Logf("healUntil aborted on StatusDead after %v", elapsed.Round(time.Millisecond))
-}
-
-func TestHealUntil_StatusDead_NoKeyPress(t *testing.T) {
-	// Even with SP key configured, healing for SP should not press
-	// any keys when reader returns StatusDead.
-	sess := &recordSession{}
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		SPThreshold: 50,
-		HPKeyVK:     'Q',
-		SPKeyVK:     'W',
-		HPEnabled:   true,
-		SPEnabled:   true,
-		Log:         func(string) {},
-		},
-	}
-	ap := NewAutoPot(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	reader := &deadReader{}
-	ap.healUntil(ctx, reader, false) // SP heal
-
-	if taps := sess.tapCount.Load(); taps > 0 {
-		t.Errorf("healUntil pressed %d keys despite StatusDead (SP heal)", taps)
-	}
-}
-
-func TestHealUntil_StatusDead_ClearsPotsEndedMode(t *testing.T) {
-	// If we somehow enter healUntil with potsEnded=true (shouldn't
-	// happen in practice, but defensive), StatusDead should still
-	// cause a clean exit with mode cleared.
-	rec := &modeRecorder{}
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-		Session:       &recordSession{},
-		HPThreshold:   50,
-		HPKeyVK:       'Q',
-		HPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
-		},
-	}
-	ap := NewAutoPot(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	reader := &deadReader{}
-	ap.healUntil(ctx, reader, true)
-
-	// clearPotsEndedMode is called with potsEnded=false since we
-	// never reached the pots-ended detection. So the callback
-	// should NOT have been called (no mode to clear).
-	if len(rec.calls) > 0 {
-		t.Errorf("mode callback called %d times with %v; expected 0 (no pots-ended state entered)",
-			len(rec.calls), rec.calls)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // healUntil tests — pots-ended detection.
 // ---------------------------------------------------------------------------
 
@@ -406,13 +294,13 @@ func TestHealUntil_PotsEndedDetected(t *testing.T) {
 	rec := &modeRecorder{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:       sess,
-		HPThreshold:   50,
-		HPKeyVK:       'Q',
-		HPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
-		HPKeyName:     "F1",
+			Session:        sess,
+			HPThreshold:    50,
+			HPKeyVK:        'Q',
+			HPEnabled:      true,
+			Log:            func(string) {},
+			OnStatusUIMode: rec.record,
+			HPKeyName:      "F1",
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -425,7 +313,7 @@ func TestHealUntil_PotsEndedDetected(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 	elapsed := time.Since(start)
 
 	t.Logf("healUntil ran for %v, %d TapKey calls, mode calls: %v",
@@ -441,10 +329,9 @@ func TestHealUntil_PotsEndedDetected(t *testing.T) {
 		t.Error("healUntil did not press any keys")
 	}
 
-	// NOTE: mode is NOT cleared on context-cancelled exit (only on
-	// normal exit via pct >= threshold or Status != StatusFound).
-	// The "cleared on exit" scenario is tested in
-	// TestHealUntil_PotsEnded_ThenValueChanges instead.
+	if rec.last() != "" {
+		t.Errorf("last mode call = %q; want empty after cancellation cleanup", rec.last())
+	}
 }
 
 // TestHealUntil_PotsEnded_ThenValueChanges verifies that when the HP
@@ -452,25 +339,25 @@ func TestHealUntil_PotsEndedDetected(t *testing.T) {
 // calls clearPotsEndedMode (which resets the mode to "").
 //
 // Split into two phases:
-//   1. constantThenSpikeReader returns HP=30 for 300+ calls → pots-ended
-//      detected and label applied.
-//   2. After switchAfter iterations, HP spikes to 80 (above threshold)
-//      → healUntil exits via clearPotsEndedMode → last mode is "".
+//  1. constantThenSpikeReader returns HP=30 for 300+ calls → pots-ended
+//     detected and label applied.
+//  2. After switchAfter iterations, HP spikes to 80 (above threshold)
+//     → healUntil exits via clearPotsEndedMode → last mode is "".
 //
-// switchAfter=303 gives ~300 fast + ~3 slow iterations (≈8s total),
-// comfortably within the 20s timeout even with Windows timer jitter.
+// switchAfter=303 gives roughly 3s of simulated reads, then a slow-mode
+// recovery check, comfortably within the 20s timeout on Windows.
 func TestHealUntil_PotsEnded_ThenValueChanges(t *testing.T) {
 	sess := &recordSession{}
 	rec := &modeRecorder{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:       sess,
-		HPThreshold:   50,
-		HPKeyVK:       'Q',
-		HPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
-		HPKeyName:     "F1",
+			Session:        sess,
+			HPThreshold:    50,
+			HPKeyVK:        'Q',
+			HPEnabled:      true,
+			Log:            func(string) {},
+			OnStatusUIMode: rec.record,
+			HPKeyName:      "F1",
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -480,13 +367,14 @@ func TestHealUntil_PotsEnded_ThenValueChanges(t *testing.T) {
 		hpSpike:     80,
 		switchAfter: 303,
 		threshold:   50,
+		readDelay:   timing.PollInterval,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 	elapsed := time.Since(start)
 
 	t.Logf("healUntil ran for %v, %d TapKey calls, mode calls: %v",
@@ -508,16 +396,16 @@ func TestHealUntil_PotsEnded_SPBar(t *testing.T) {
 	rec := &modeRecorder{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:       sess,
-		HPThreshold:   50,
-		SPThreshold:   50,
-		HPKeyVK:       'Q',
-		SPKeyVK:       'W',
-		HPEnabled:     false, // only SP enabled
-		SPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
-		SPKeyName:     "F2",
+			Session:        sess,
+			HPThreshold:    50,
+			SPThreshold:    50,
+			HPKeyVK:        'Q',
+			SPKeyVK:        'W',
+			HPEnabled:      false, // only SP enabled
+			SPEnabled:      true,
+			Log:            func(string) {},
+			OnStatusUIMode: rec.record,
+			SPKeyName:      "F2",
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -529,7 +417,7 @@ func TestHealUntil_PotsEnded_SPBar(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, false) // SP bar
+	ap.healer.healUntil(ctx, reader, false) // SP bar
 	elapsed := time.Since(start)
 
 	t.Logf("SP healUntil ran for %v, %d TapKey calls, mode calls: %v",
@@ -539,9 +427,9 @@ func TestHealUntil_PotsEnded_SPBar(t *testing.T) {
 		t.Errorf("mode calls %v do not contain %q", rec.calls, "SP pots ended on F2")
 	}
 
-	// NOTE: mode is NOT cleared on context-cancelled exit.
-	// The "cleared on exit" scenario for SP is tested implicitly
-	// via TestHealUntil_PotsEnded_ThenValueChanges (HP heal).
+	if rec.last() != "" {
+		t.Errorf("last mode call = %q; want empty after cancellation cleanup", rec.last())
+	}
 }
 
 // TestHealUntil_PotsEnded_ReApply verifies that the pots-ended label
@@ -550,21 +438,21 @@ func TestHealUntil_PotsEnded_SPBar(t *testing.T) {
 // We test this by verifying multiple identical calls to OnStatusUIMode.
 //
 // Timing on Windows:
-//   - 300 fast iterations × ~15ms = ~4.5s → pots-ended detected
-//   - Remaining ~3.5s in the 8s budget = ~3 slow iterations
+//   - 300 simulated visual reads × ~10ms = ~3s → pots-ended detected
+//   - Remaining time in the 8s budget allows multiple slow iterations
 //   - Each slow iteration re-applies the label = ≥2 total
 func TestHealUntil_PotsEnded_ReApply(t *testing.T) {
 	sess := &recordSession{}
 	rec := &modeRecorder{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:       sess,
-		HPThreshold:   50,
-		HPKeyVK:       'Q',
-		HPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
-		HPKeyName:     "F1",
+			Session:        sess,
+			HPThreshold:    50,
+			HPKeyVK:        'Q',
+			HPEnabled:      true,
+			Log:            func(string) {},
+			OnStatusUIMode: rec.record,
+			HPKeyName:      "F1",
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -575,7 +463,7 @@ func TestHealUntil_PotsEnded_ReApply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 
 	// Count consecutive "HP pots ended on F1" calls after pots-ended
 	// was first triggered. Since healUntil exits via ctx cancellation
@@ -613,12 +501,12 @@ func TestHealUntil_HealsImmediately_NoPotsEnded(t *testing.T) {
 	rec := &modeRecorder{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Session:       sess,
-		HPThreshold:   50,
-		HPKeyVK:       'Q',
-		HPEnabled:     true,
-		Log:           func(string) {},
-		OnStatusUIMode: rec.record,
+			Session:        sess,
+			HPThreshold:    50,
+			HPKeyVK:        'Q',
+			HPEnabled:      true,
+			Log:            func(string) {},
+			OnStatusUIMode: rec.record,
 		},
 	}
 	ap := NewAutoPot(cfg)
@@ -629,7 +517,7 @@ func TestHealUntil_HealsImmediately_NoPotsEnded(t *testing.T) {
 	reader := &constantReader{hp: 80, sp: 80} // above threshold
 
 	start := time.Now()
-	ap.healUntil(ctx, reader, true)
+	ap.healer.healUntil(ctx, reader, true)
 	elapsed := time.Since(start)
 
 	if elapsed > 100*time.Millisecond {

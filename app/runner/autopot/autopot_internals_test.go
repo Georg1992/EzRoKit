@@ -111,198 +111,91 @@ func TestReaderFactory_VisualModeNoPID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// dispatchVisual tests
+// readerController tests
 // ---------------------------------------------------------------------------
 
-func TestDispatchVisual_OCRSwitchToPixel(t *testing.T) {
-	// When OCR returns StatusInvalid, dispatchVisual should switch
+func TestReaderController_OCRSwitchToPixel(t *testing.T) {
+	// When OCR returns StatusInvalid, readerController should switch
 	// to pixel and return false (iteration consumed).
-	ap := &AutoPotRunner{}
 	pixel := &pixelBarReader{log: func(string) {}}
 	ocr := &statusUIReader{}
-	reader := BarReader(ocr) // reader == ocr initially
+	controller := newReaderController(ocr, pixel, ocr, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}}}
 	result := BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("ocr failed")}
-	nextOCRRetry := time.Time{}
 
-	proceed := ap.handleOCR(cfg, &reader, pixel, result, &nextOCRRetry)
-	if !proceed {
-		t.Error("handleOCR: expected true (iteration consumed) on OCR failure")
+	proceed := controller.process(context.Background(), cfg, result)
+	if proceed {
+		t.Error("readerController: expected invalid OCR result to be consumed")
 	}
-	// Reader should now point to pixel.
-	if reader != pixel {
-		t.Error("handleOCR: reader was not switched to pixel on OCR failure")
+	if controller.reader() != pixel {
+		t.Error("readerController: reader was not switched to pixel on OCR failure")
 	}
 }
 
-func TestDispatchVisual_OCRSuccess(t *testing.T) {
-	// When OCR returns StatusFound, dispatchVisual should return true
+func TestReaderController_OCRSuccess(t *testing.T) {
+	// When OCR returns StatusFound, readerController should proceed
 	// (proceed to normal processing).
-	ap := &AutoPotRunner{}
 	pixel := &pixelBarReader{}
 	ocr := &statusUIReader{}
-	reader := BarReader(ocr)
+	controller := newReaderController(ocr, pixel, ocr, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{}}
 	result := BarReadResult{Status: StatusFound, HP: 80, SP: 80}
-	nextOCRRetry := time.Time{}
 
-	proceed := ap.handleOCR(cfg, &reader, pixel, result, &nextOCRRetry)
-	if proceed {
-		t.Error("handleOCR: expected false (not consumed) on OCR success")
+	if !controller.process(context.Background(), cfg, result) {
+		t.Error("readerController: expected valid OCR result to proceed")
 	}
-	if reader != ocr {
-		t.Error("handleOCR: reader should still be ocr on success")
+	if controller.reader() != ocr {
+		t.Error("readerController: reader should still be OCR on success")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// handleDead tests
+// readerController OCR tests
 // ---------------------------------------------------------------------------
 
-func TestHandleDead_NotDead(t *testing.T) {
-	ap := &AutoPotRunner{}
-	dead := false
-	ctx := context.Background()
-	cfg := AutoPotConfig{Core: CoreConfig{HPEnabled: true, HPKeyVK: 'Q', Log: func(string) {}}}
-	result := BarReadResult{Status: StatusFound, HP: 80}
-
-	consumed := ap.handleDead(ctx, cfg, result, &dead)
-	if consumed {
-		t.Error("handleDead: expected false for StatusFound")
-	}
-	if dead {
-		t.Error("handleDead: dead should remain false for StatusFound")
-	}
-}
-
-func TestHandleDead_FirstDead(t *testing.T) {
-	ap := &AutoPotRunner{}
-	dead := false
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	logged := ""
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-		Session:   &recordSession{},
-		HPEnabled: true,
-		HPKeyVK:   'Q',
-		Log:       func(s string) { logged = s },
-		},
-	}
-	result := BarReadResult{Status: StatusDead}
-
-	consumed := ap.handleDead(ctx, cfg, result, &dead)
-	if !consumed {
-		t.Error("handleDead: expected true for StatusDead")
-	}
-	if !dead {
-		t.Error("handleDead: dead should be true after StatusDead")
-	}
-	if logged != "autopot: character dead (HP=1)" {
-		t.Errorf("handleDead: log = %q; want %q", logged, "autopot: character dead (HP=1)")
-	}
-}
-
-func TestHandleDead_RepeatDead(t *testing.T) {
-	ap := &AutoPotRunner{}
-	dead := true // already marked dead
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	logCount := 0
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-		Session:   &recordSession{},
-		HPEnabled: true,
-		HPKeyVK:   'Q',
-		Log:       func(s string) { logCount++ },
-		},
-	}
-	result := BarReadResult{Status: StatusDead}
-
-	consumed := ap.handleDead(ctx, cfg, result, &dead)
-	if !consumed {
-		t.Error("handleDead: expected true for StatusDead (already dead)")
-	}
-	if logCount != 0 {
-		t.Error("handleDead: should not log on repeat dead")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleOCR tests
-// ---------------------------------------------------------------------------
-
-func TestHandleOCR_Found(t *testing.T) {
-	ap := &AutoPotRunner{}
+func TestReaderController_OCRFound(t *testing.T) {
 	pixel := &pixelBarReader{}
 	ocr := &statusUIReader{}
-	reader := BarReader(ocr)
+	controller := newReaderController(ocr, pixel, ocr, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}}}
 	result := BarReadResult{Status: StatusFound, HP: 80, SP: 80}
-	nextOCRRetry := time.Time{}
 
-	proceed := ap.handleOCR(cfg, &reader, pixel, result, &nextOCRRetry)
-	if proceed {
-		t.Error("handleOCR: expected false for StatusFound")
+	if !controller.process(context.Background(), cfg, result) {
+		t.Error("readerController: expected valid result to proceed")
 	}
-	if reader != ocr {
-		t.Error("handleOCR: reader should not change on StatusFound")
+	if controller.reader() != ocr {
+		t.Error("readerController: reader should not change on valid result")
 	}
 }
 
-func TestHandleOCR_FailureSwitch(t *testing.T) {
-	ap := &AutoPotRunner{}
+func TestReaderController_OCRFailureSwitch(t *testing.T) {
 	pixel := &pixelBarReader{log: func(string) {}}
 	ocr := &statusUIReader{}
-	reader := BarReader(ocr)
+	controller := newReaderController(ocr, pixel, ocr, false)
 
 	modeFns := []string{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Log:           func(string) {},
-		OnStatusUIMode: func(s string) { modeFns = append(modeFns, s) },
+			Log:            func(string) {},
+			OnStatusUIMode: func(s string) { modeFns = append(modeFns, s) },
 		},
 	}
 	result := BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("ocr lost panel")}
-	nextOCRRetry := time.Time{}
 
-	proceed := ap.handleOCR(cfg, &reader, pixel, result, &nextOCRRetry)
-	if !proceed {
-		t.Error("handleOCR: expected true (consumed) on OCR failure")
+	if controller.process(context.Background(), cfg, result) {
+		t.Error("readerController: expected invalid OCR result to be consumed")
 	}
-	if reader != pixel {
-		t.Error("handleOCR: reader should switch to pixel on failure")
+	if controller.reader() != pixel {
+		t.Error("readerController: reader should switch to pixel on failure")
 	}
 	if len(modeFns) == 0 || modeFns[len(modeFns)-1] != "Pixelsearch" {
-		t.Errorf("handleOCR: expected Pixelsearch mode, got %v", modeFns)
+		t.Errorf("readerController: expected Pixelsearch mode, got %v", modeFns)
 	}
-	if nextOCRRetry.IsZero() {
-		t.Error("handleOCR: nextOCRRetry should be set")
-	}
-}
-
-func TestHandleOCR_DeadSwitchesToPixel(t *testing.T) {
-	// StatusDead should also trigger the pixel fallback.
-	ap := &AutoPotRunner{}
-	pixel := &pixelBarReader{log: func(string) {}}
-	ocr := &statusUIReader{}
-	reader := BarReader(ocr)
-
-	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}}}
-	result := BarReadResult{Status: StatusDead, Err: fmt.Errorf("HP=1")}
-	nextOCRRetry := time.Time{}
-
-	proceed := ap.handleOCR(cfg, &reader, pixel, result, &nextOCRRetry)
-	if !proceed {
-		t.Error("handleOCR: expected true for StatusDead")
-	}
-	if reader != pixel {
-		t.Error("handleOCR: reader should switch to pixel on StatusDead")
+	if controller.nextOCRRetry.IsZero() {
+		t.Error("readerController: nextOCRRetry should be set")
 	}
 }
 
@@ -311,11 +204,11 @@ func TestHandleOCR_DeadSwitchesToPixel(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPotsEndedStep_NotEnded(t *testing.T) {
-	ap := &AutoPotRunner{}
+	h := &healer{}
 	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}}}
 	now := time.Now()
 
-	ended, hs := ap.potsEndedStep(cfg, true, time.Second, 30, 30, false, now)
+	ended, hs := h.potsEndedStep(cfg, true, time.Second, 30, 30, false, now)
 	if ended {
 		t.Error("potsEndedStep: should not detect pots-ended after 1s")
 	}
@@ -325,14 +218,14 @@ func TestPotsEndedStep_NotEnded(t *testing.T) {
 }
 
 func TestPotsEndedStep_DetectsEnded(t *testing.T) {
-	ap := &AutoPotRunner{}
+	h := &healer{}
 	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}, HPKeyName: "F1"}}
 
 	logged := ""
 	cfg.Core.Log = func(s string) { logged = s }
 	now := time.Now()
 
-	ended, _ := ap.potsEndedStep(cfg, true, 4*time.Second, 30, 30, false, now)
+	ended, _ := h.potsEndedStep(cfg, true, 4*time.Second, 30, 30, false, now)
 	if !ended {
 		t.Error("potsEndedStep: should detect pots-ended after 3s with no change")
 	}
@@ -342,17 +235,17 @@ func TestPotsEndedStep_DetectsEnded(t *testing.T) {
 }
 
 func TestPotsEndedStep_Recovers(t *testing.T) {
-	ap := &AutoPotRunner{}
+	h := &healer{}
 	modeCalls := []string{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Log:           func(string) {},
-		OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
+			Log:            func(string) {},
+			OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
 		},
 	}
 	now := time.Now()
 
-	ended, hs := ap.potsEndedStep(cfg, true, 4*time.Second, 60, 30, true, now)
+	ended, hs := h.potsEndedStep(cfg, true, 4*time.Second, 60, 30, true, now)
 	if ended {
 		t.Error("potsEndedStep: should detect recovery (30→60)")
 	}
@@ -363,18 +256,18 @@ func TestPotsEndedStep_Recovers(t *testing.T) {
 }
 
 func TestPotsEndedStep_ReAppliesLabel(t *testing.T) {
-	ap := &AutoPotRunner{}
+	h := &healer{}
 	modeCalls := []string{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-		Log:           func(string) {},
-		OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
-		HPKeyName:     "F1",
+			Log:            func(string) {},
+			OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
+			HPKeyName:      "F1",
 		},
 	}
 	now := time.Now()
 
-	ended, hs := ap.potsEndedStep(cfg, true, 4*time.Second, 30, 30, true, now)
+	ended, hs := h.potsEndedStep(cfg, true, 4*time.Second, 30, 30, true, now)
 	if !ended {
 		t.Error("potsEndedStep: should still be in pots-ended mode")
 	}
@@ -391,18 +284,18 @@ func TestPotsEndedStep_ReAppliesLabel(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPotsEndedTap_SuccessfulHeal(t *testing.T) {
-	// When the value changes >= 1% after tap, potsEndedTap returns true.
+	// When the value changes >= 1% after tap, potsEndedTap reports recovery.
 	sess := &recordSession{}
 	reader := &constantReader{hp: 70, sp: 80} // reader returns value after tap
 	cfg := AutoPotConfig{Core: CoreConfig{Session: sess, Log: func(string) {}}}
-	ap := &AutoPotRunner{}
+	h := &healer{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	recovered := ap.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
-	if !recovered {
-		t.Error("potsEndedTap: expected true when value rises (30→70)")
+	recovered, ok := h.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
+	if !ok || !recovered {
+		t.Error("potsEndedTap: expected successful recovery when value rises (30→70)")
 	}
 	if taps := sess.tapCount.Load(); taps != 1 {
 		t.Errorf("potsEndedTap: expected 1 TapKey call, got %d", taps)
@@ -410,34 +303,34 @@ func TestPotsEndedTap_SuccessfulHeal(t *testing.T) {
 }
 
 func TestPotsEndedTap_NoRecovery(t *testing.T) {
-	// When the value stays the same after tap, potsEndedTap returns false.
+	// When the value stays the same after tap, potsEndedTap reports no recovery.
 	sess := &recordSession{}
 	reader := &constantReader{hp: 30, sp: 80} // same value
 	cfg := AutoPotConfig{Core: CoreConfig{Session: sess, Log: func(string) {}}}
-	ap := &AutoPotRunner{}
+	h := &healer{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	recovered := ap.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
-	if recovered {
-		t.Error("potsEndedTap: expected false when value unchanged (30→30)")
+	recovered, ok := h.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
+	if !ok || recovered {
+		t.Error("potsEndedTap: expected a successful non-recovery when value is unchanged (30→30)")
 	}
 }
 
 func TestPotsEndedTap_TapKeyError(t *testing.T) {
-	// When TapKey returns error, potsEndedTap returns false.
+	// When TapKey returns error, potsEndedTap reports a terminal failure.
 	sess := &errorSession{}
 	reader := &constantReader{hp: 70, sp: 80}
 	cfg := AutoPotConfig{Core: CoreConfig{Session: sess, Log: func(string) {}}}
-	ap := &AutoPotRunner{}
+	h := &healer{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	recovered := ap.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
-	if recovered {
-		t.Error("potsEndedTap: expected false when TapKey fails")
+	recovered, ok := h.potsEndedTap(ctx, cfg, 'Q', reader, true, 30)
+	if ok || recovered {
+		t.Error("potsEndedTap: expected a terminal failure when TapKey fails")
 	}
 }
 
@@ -445,74 +338,97 @@ func TestPotsEndedTap_TapKeyError(t *testing.T) {
 type errorSession struct{}
 
 func (s *errorSession) TapKey(_ int32, _ time.Duration) error { return fmt.Errorf("session error") }
-func (s *errorSession) MouseClick(_ time.Duration) error       { return nil }
+func (s *errorSession) MouseClick(_ time.Duration) error      { return nil }
+
+// initialSnapshotReader returns a recovered value on its first actual read.
+// The initial low result supplied to healUntilWithInitial must still trigger
+// one immediate tap before that read occurs.
+type initialSnapshotReader struct {
+	calls int
+}
+
+func (r *initialSnapshotReader) ReadValues(_ context.Context) BarReadResult {
+	r.calls++
+	return BarReadResult{Status: StatusFound, HP: 80, SP: 80}
+}
+
+func (r *initialSnapshotReader) Name() string { return "initialSnapshot" }
+
+func TestHealUntilWithInitial_UsesSnapshotBeforeReadingAgain(t *testing.T) {
+	sess := &recordSession{}
+	cfg := AutoPotConfig{Core: CoreConfig{
+		Session:     sess,
+		HPEnabled:   true,
+		HPKeyVK:     'Q',
+		HPThreshold: 50,
+		Log:         func(string) {},
+	}}
+	ap := NewAutoPot(cfg)
+	reader := &initialSnapshotReader{}
+	initial := BarReadResult{Status: StatusFound, HP: 30, SP: 80, HPLow: true}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ap.healer.healUntilWithInitial(ctx, reader, true, &initial)
+
+	if taps := sess.tapCount.Load(); taps != 1 {
+		t.Fatalf("expected one immediate potion tap, got %d", taps)
+	}
+	if reader.calls != 1 {
+		t.Fatalf("expected one post-tap read, got %d (initial snapshot was reread)", reader.calls)
+	}
+}
 
 // ---------------------------------------------------------------------------
-// dispatchVisual: full path tests
+// readerController full path tests
 // ---------------------------------------------------------------------------
 
-func TestDispatchVisual_OCR_Proceed(t *testing.T) {
-	ap := &AutoPotRunner{}
+func TestReaderController_OCRProceed(t *testing.T) {
 	pixel := &pixelBarReader{}
 	ocr := &statusUIReader{}
-	reader := BarReader(ocr)
+	controller := newReaderController(ocr, pixel, ocr, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{}}
 	result := BarReadResult{Status: StatusFound, HP: 80}
-	nextOCRRetry := time.Time{}
-	var pfs time.Time
-	lpf := false
 
-	proceed := ap.dispatchVisual(context.Background(), cfg, &reader, pixel, ocr, &result, &nextOCRRetry, &pfs, &lpf)
-	if !proceed {
-		t.Error("dispatchVisual: expected true for OCR StatusFound")
+	if !controller.process(context.Background(), cfg, result) {
+		t.Error("readerController: expected valid OCR result to proceed")
 	}
 }
 
-func TestDispatchVisual_Pixel_BarsFound_Proceed(t *testing.T) {
-	ap := &AutoPotRunner{}
+func TestReaderController_PixelBarsFound(t *testing.T) {
 	pixel := &pixelBarReader{}
-	reader := BarReader(pixel)
+	controller := newReaderController(pixel, pixel, nil, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{}}
 	result := BarReadResult{Status: StatusFound, HP: 80}
-	nextOCRRetry := time.Now().Add(time.Hour) // don't probe OCR
-	var pfs time.Time
-	lpf := false
 
-	// Passing nil for ocr — handlePixel checks ocr != nil before probing.
-	proceed := ap.dispatchVisual(context.Background(), cfg, &reader, pixel, nil, &result, &nextOCRRetry, &pfs, &lpf)
-	if !proceed {
-		t.Error("dispatchVisual: expected true for pixel StatusFound")
+	if !controller.process(context.Background(), cfg, result) {
+		t.Error("readerController: expected valid pixel result to proceed")
 	}
 }
 
-func TestDispatchVisual_Pixel_BarsNotFound(t *testing.T) {
-	ap := &AutoPotRunner{}
+func TestReaderController_PixelBarsNotFound(t *testing.T) {
 	pixel := &pixelBarReader{log: func(string) {}}
-	ocr := &statusUIReader{}
-	reader := BarReader(pixel)
+	controller := newReaderController(pixel, pixel, nil, false)
 
 	cfg := AutoPotConfig{Core: CoreConfig{Log: func(string) {}}}
 	result := BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("no bars found")}
-	nextOCRRetry := time.Now().Add(time.Hour) // don't probe OCR
-	var pfs time.Time
-	lpf := false
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	proceed := ap.dispatchVisual(ctx, cfg, &reader, pixel, ocr, &result, &nextOCRRetry, &pfs, &lpf)
-	if proceed {
-		t.Error("dispatchVisual: expected false when pixel bars not found")
+	if controller.process(ctx, cfg, result) {
+		t.Error("readerController: expected invalid pixel result to be consumed")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Concurrent safety: ReaderFactory.Build + handleDead under -race
+// Concurrent safety: ReaderFactory.Build under -race
 // ---------------------------------------------------------------------------
 
-func TestReaderFactoryConcurrentRace(t *testing.T) {	cfg := AutoPotConfig{
+func TestReaderFactoryConcurrentRace(t *testing.T) {
+	cfg := AutoPotConfig{
 		Core: CoreConfig{
 			HPThreshold: 50,
 			SPThreshold: 50,
@@ -527,23 +443,6 @@ func TestReaderFactoryConcurrentRace(t *testing.T) {	cfg := AutoPotConfig{
 		go func() {
 			defer wg.Done()
 			_, _, _, _ = NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
-		}()
-	}
-	wg.Wait()
-}
-
-func TestHandleDeadConcurrentRace(t *testing.T) {
-	ap := &AutoPotRunner{}
-	dead := false
-	ctx := context.Background()
-	cfg := AutoPotConfig{Core: CoreConfig{HPEnabled: true, HPKeyVK: 'Q', Log: func(string) {}}}
-
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ap.handleDead(ctx, cfg, BarReadResult{Status: StatusFound, HP: 80}, &dead)
 		}()
 	}
 	wg.Wait()

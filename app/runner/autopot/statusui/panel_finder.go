@@ -228,7 +228,7 @@ func computeSadPartial(ib image.Rectangle, tw, th, minVisPx int, fastOK bool, im
 
 	var rawSum float64
 	if fastOK {
-		rawSum = sadOnGrayscalePartial(imgGray, tplGray, x0, y0, dxStart, dyStart, dxEnd, dyEnd, scaledExit)
+		rawSum = sadOnGrayscalePartial(imgGray, tplGray, ib, x0, y0, dxStart, dyStart, dxEnd, dyEnd, scaledExit)
 	} else {
 		rawSum = sadWithEarlyExitPartial(img, tplGray, x0, y0, dxStart, dyStart, dxEnd, dyEnd, scaledExit)
 	}
@@ -272,14 +272,13 @@ func precomputeImageGrayscale(img image.Image, b image.Rectangle) ([][]uint8, bo
 	}
 	w, h := b.Dx(), b.Dy()
 	out := make([][]uint8, h)
-	stride := rgba.Stride
 	pix := rgba.Pix
 	for y := 0; y < h; y++ {
 		row := make([]uint8, w)
 		srcY := b.Min.Y + y
 		for x := 0; x < w; x++ {
 			srcX := b.Min.X + x
-			off := srcY*stride + srcX*4
+			off := rgba.PixOffset(srcX, srcY)
 			row[x] = luma8FromRGBA(pix[off], pix[off+1], pix[off+2])
 		}
 		out[y] = row
@@ -289,13 +288,13 @@ func precomputeImageGrayscale(img image.Image, b image.Rectangle) ([][]uint8, bo
 
 // sadOnGrayscalePartial computes the SAD over only the visible sub-rectangle
 // [dxStart,dxEnd) × [dyStart,dyEnd) of the template against the grayscale image.
-func sadOnGrayscalePartial(imgGray, tpl [][]uint8, x0, y0, dxStart, dyStart, dxEnd, dyEnd int, earlyExit float64) float64 {
+func sadOnGrayscalePartial(imgGray, tpl [][]uint8, ib image.Rectangle, x0, y0, dxStart, dyStart, dxEnd, dyEnd int, earlyExit float64) float64 {
 	sum := 0.0
 	for dy := dyStart; dy < dyEnd; dy++ {
-		irow := imgGray[y0+dy]
+		irow := imgGray[y0+dy-ib.Min.Y]
 		trow := tpl[dy]
 		for dx := dxStart; dx < dxEnd; dx++ {
-			diff := float64(trow[dx]) - float64(irow[x0+dx])
+			diff := float64(trow[dx]) - float64(irow[x0+dx-ib.Min.X])
 			if diff < 0 {
 				diff = -diff
 			}
@@ -347,5 +346,11 @@ func luma8(c color.Color) uint8 {
 // from this by the alpha factor, so call the color.Color version
 // instead.
 func luma8FromRGBA(r, g, b uint8) uint8 {
-	return uint8((uint32(r)*299 + uint32(g)*587 + uint32(b)*114) / 1000)
+	// Expand 8-bit channels the same way color.RGBA() does before
+	// applying the canonical luma formula, so the fast and At() paths
+	// produce identical grayscale values.
+	r16 := uint32(r) * 257
+	g16 := uint32(g) * 257
+	b16 := uint32(b) * 257
+	return uint8(((r16*299 + g16*587 + b16*114) / 1000) >> 8)
 }

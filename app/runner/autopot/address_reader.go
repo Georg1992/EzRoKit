@@ -79,14 +79,6 @@ func (r *addressReader) ReadValues(ctx context.Context) BarReadResult {
 
 	hpPct, spPct := r.pct(curHP, maxHP, curSP, maxSP)
 
-	if curHP == 1 {
-		return BarReadResult{
-			HP: hpPct, SP: spPct,
-			Status: StatusDead,
-			Err:    fmt.Errorf("character dead (HP=1)"),
-		}
-	}
-
 	if r.onParsed != nil {
 		r.onParsed(int(curHP), int(maxHP), int(curSP), int(maxSP), 0, 0, 0, 0)
 	}

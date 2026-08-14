@@ -349,9 +349,11 @@ func TestParseText_Valid(t *testing.T) {
 func TestParseText_Invalid(t *testing.T) {
 	for _, text := range []string{
 		"HP.1045/1290XX.66/201", // wrong label
-		"HP.66/201",             // sp missing
-		"hello world",           // not numbers at all
-		"",                      // empty
+		"HP.1045/1290|SP.66/201noise", // trailing OCR noise
+		"noiseHP.1045/1290|SP.66/201", // leading OCR noise
+		"HP.66/201",                   // sp missing
+		"hello world",                 // not numbers at all
+		"",                            // empty
 	} {
 		if _, _, _, _, err := parseText(text); err == nil {
 			t.Errorf("parseText(%q): want error, got nil", text)
