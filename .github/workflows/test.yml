@@ -24,13 +24,18 @@ jobs:
       # produced by build.ps1. Build it from the checked-out submodule
       # before compiling the GUI package.
       - name: Build embedded VIIPER binary
-        working-directory: VIIPER
         shell: pwsh
         run: |
+          $root = $env:GITHUB_WORKSPACE
+          Push-Location (Join-Path $root 'VIIPER')
           New-Item -ItemType Directory -Force dist | Out-Null
           $env:CGO_ENABLED = '0'
-          go build -trimpath -o dist/viiper.exe ./cmd/viiper
-          Copy-Item dist/viiper.exe ..\app\gui\embed\viiper.exe -Force
+          go build -trimpath -o (Join-Path $root 'VIIPER\dist\viiper.exe') ./cmd/viiper
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          Pop-Location
+          $dest = Join-Path $root 'app\gui\embed\viiper.exe'
+          Copy-Item (Join-Path $root 'VIIPER\dist\viiper.exe') $dest -Force
+          if (-not (Test-Path $dest)) { Write-Error "Embedded VIIPER binary missing: $dest"; exit 1 }
       - name: Run vet and tests
         working-directory: app
         run: |
