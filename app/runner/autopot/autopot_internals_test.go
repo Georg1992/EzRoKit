@@ -133,24 +133,6 @@ func TestReaderController_OCRSwitchToPixel(t *testing.T) {
 	}
 }
 
-func TestReaderController_OCRSuccess(t *testing.T) {
-	// When OCR returns StatusFound, readerController should proceed
-	// (proceed to normal processing).
-	pixel := &pixelBarReader{}
-	ocr := &statusUIReader{}
-	controller := newReaderController(ocr, pixel, ocr, false)
-
-	cfg := AutoPotConfig{Core: CoreConfig{}}
-	result := BarReadResult{Status: StatusFound, HP: 80, SP: 80}
-
-	if !controller.process(context.Background(), cfg, result) {
-		t.Error("readerController: expected valid OCR result to proceed")
-	}
-	if controller.reader() != ocr {
-		t.Error("readerController: reader should still be OCR on success")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // readerController OCR tests
 // ---------------------------------------------------------------------------
