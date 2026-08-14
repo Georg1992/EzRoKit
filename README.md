@@ -52,6 +52,15 @@ Output: `release/BelarusChampTools-Windows-x64/` and `release/BelarusChampTools-
 
 Users extract the ZIP and run `Install.cmd`. See `packaging/README.txt`.
 
+## CI/CD
+
+Every push/PR runs `go vet`, the full test suite, the race detector, and the dead-methods guard on Windows. Pushing a version tag (e.g. `v1.0.0`) additionally builds the release ZIP and uploads it as a workflow artifact:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ## Usage
 
 1. Launch the app — VIIPER starts automatically (takes a few seconds)
@@ -63,13 +72,15 @@ Users extract the ZIP and run `Install.cmd`. See `packaging/README.txt`.
 
 ### AutoPot tab
 
-1. Keep the game visible with your character near **screen center** (green HP / blue SP bars under the sprite)
-2. Set trigger **%** and assign **hotkeys** for HP and SP potions
-3. Click **Start**
+Two reading modes are available:
 
-Bars under the character are detected by color in a small center region. When HP or SP drops below the threshold, the assigned key is pressed until the bar recovers.
+- **Visual (screen capture)** — OCR reads the HP/SP numbers from the in-game
+  status panel, with color-based bar detection as an automatic fallback.
+  Keep the game visible so the panel/bars can be found.
+- **Address reading** — reads HP/SP directly from the game process memory.
+  Select the game window and a profile, then assign the potion hotkeys.
 
-Set `BAR_SEARCH_DEBUG=1` to save a `bar_search_debug.png` crop for calibration.
+Set the trigger **%** and assign **hotkeys** for HP and SP potions, then click **Start**. When HP or SP drops below its threshold, the assigned key is pressed until the value recovers.
 
 Status indicator: red **OFF**, green **ON**.
 
@@ -106,11 +117,16 @@ Default delay: **50 ms**. If a game misses clicks, try **50–100 ms**.
 | `app/gui/server.go` | Embedded VIIPER lifecycle |
 | `app/gui/viiper_badge.go` | VIIPER server status badge |
 | `app/gui/viiper_monitor.go` | VIIPER server health monitor |
+| `app/gui/overlay_windows.go` | On-screen HP/SP status overlay |
+| `app/gui/runner_control.go` | Shared runner start/stop and key-bind helpers |
 | `app/runner/clicker.go` | Click loop (hold trigger to click) |
-| `app/runner/autopot/` | AutoPot healing loop |
+| `app/runner/autopot/` | AutoPot healing loop (OCR/pixel/address readers) |
+| `app/runner/autopot/healer.go` | Potion timing and empty-pot policy |
+| `app/runner/autopot/reader_controller.go` | OCR ↔ pixel failover |
 | `app/runner/keychain.go` | KeyChain macro runner |
 | `app/runner/timer_key.go` | Timer key runner |
 | `app/runner/viiper_session.go` | VIIPER session (keyboard + mouse) |
 | `packaging/` | Install/Uninstall scripts and user READMEs |
 | `release/` | Generated folder + ZIP (`package.ps1`) |
+| `.github/workflows/test.yml` | CI tests + tag-triggered release builds |
 | `VIIPER/` | Upstream VIIPER (`replace` in `app/go.mod`) |
