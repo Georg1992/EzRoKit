@@ -93,6 +93,13 @@ func VKToHID(vk int32) (uint8, bool) {
 // pressed), ignoring any keys already held down when the function started.
 // Phase 2 — wait for that specific key to be released.
 func WaitForKeyPress(timeout time.Duration) (int32, bool) {
+	return WaitForKeyPressContext(context.Background(), timeout)
+}
+
+// WaitForKeyPressContext is the cancellable form of WaitForKeyPress. It
+// preserves the press-and-release binding semantics while allowing GUI
+// shutdown to terminate the polling goroutine immediately.
+func WaitForKeyPressContext(ctx context.Context, timeout time.Duration) (int32, bool) {
 	deadline := time.Now().Add(timeout)
 
 	// Track the previous state of each key so we can detect rising edges.
@@ -105,7 +112,7 @@ func WaitForKeyPress(timeout time.Duration) (int32, bool) {
 
 	// Phase 1: wait for any rising edge (new key press).
 	for {
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil || time.Now().After(deadline) {
 			return 0, false
 		}
 		for vk := range keyNames {
@@ -115,16 +122,19 @@ func WaitForKeyPress(timeout time.Duration) (int32, bool) {
 				// before returning, so the binder doesn't sync the runner
 				// while the key is still held down.
 				for PhysicalKeyDown(vk) {
-					if time.Now().After(deadline) {
+					if ctx.Err() != nil || time.Now().After(deadline) {
 						return 0, false
 					}
-					time.Sleep(timing.PollInterval)
+					timing.Sleep(ctx, timing.PollInterval)
+				}
+				if ctx.Err() != nil {
+					return 0, false
 				}
 				return vk, true
 			}
 			prev[vk] = nowDown
 		}
-		time.Sleep(timing.PollInterval)
+		timing.Sleep(ctx, timing.PollInterval)
 	}
 }
 
@@ -146,7 +156,7 @@ func StartToggleKeyWatcher(ctx context.Context, onToggle func(vk int32)) {
 					onToggle(vk)
 				}
 			}
-			time.Sleep(timing.PollInterval)
+			timing.Sleep(ctx, timing.PollInterval)
 		}
 	}()
 }

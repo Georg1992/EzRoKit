@@ -291,9 +291,6 @@ func (s *recordSession) TapKey(vk int32, hold time.Duration) error {
 	return nil
 }
 
-func (s *recordSession) Paused() bool { return false }
-func (s *recordSession) SetPaused(bool) {}
-
 func (s *recordSession) MouseClick(_ time.Duration) error { return nil }
 
 // ---------------------------------------------------------------------------

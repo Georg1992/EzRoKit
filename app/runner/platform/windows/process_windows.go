@@ -90,8 +90,8 @@ func GetProcessBaseAddr(pid uint32) (uintptr, error) {
 // titles for one whose title contains the given substring. Returns the PID
 // of the first match, or 0 if none found.
 func FindVisibleWindowPID(title string) uint32 {
-	cb := syscall.NewCallback(func(hwnd, lParam uintptr) uintptr {
-		ptr := (*uint32)(unsafe.Pointer(lParam))
+	var foundPID uint32
+	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
 
 		visible, _, _ := procIsWindowVisible.Call(hwnd)
 		if visible == 0 {
@@ -114,14 +114,13 @@ func FindVisibleWindowPID(title string) uint32 {
 		if strings.Contains(winTitle, title) {
 			var pid uint32
 			procGetWindowThreadProcessId2.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-			*(*uint32)(unsafe.Pointer(ptr)) = pid //nolint:govet — Win32 callback, lParam is always a valid aligned pointer
+			foundPID = pid
 			return 0 // stop enumeration
 		}
 		return 1
 	})
 
-	var foundPID uint32
-	procEnumWindows.Call(cb, uintptr(unsafe.Pointer(&foundPID)))
+	procEnumWindows.Call(cb, 0)
 	return foundPID
 }
 

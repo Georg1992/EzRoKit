@@ -3,8 +3,8 @@
 package main
 
 import (
+	"runtime"
 	"sort"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -29,47 +29,36 @@ type windowInfo struct {
 	pid   uint32
 }
 
-// enumWindowsCallback is the callback for EnumWindows.
-var enumWindowsCallback uintptr
-
-// enumWindowsOnce ensures the callback is registered once.
-var enumWindowsOnce sync.Once
-
 // listVisibleWindows returns all visible top-level windows with
 // non-empty titles, sorted alphabetically, along with each window's PID.
 func listVisibleWindows() []windowInfo {
-	enumWindowsOnce.Do(func() {
-		enumWindowsCallback = syscall.NewCallback(func(hwnd, lParam uintptr) uintptr {
-			ptr := (*[]windowInfo)(unsafe.Pointer(lParam)) //nolint:govet — Win32 callback, lParam is always a valid aligned pointer
-
-			visible, _, _ := procIsWindowVisible.Call(hwnd)
-			if visible == 0 {
-				return 1 // continue enumeration
-			}
-
-			length, _, _ := procGetWindowTextLengthW.Call(hwnd)
-			if length == 0 {
-				return 1
-			}
-
-			buf := make([]uint16, length+1)
-			procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(length+1))
-			title := syscall.UTF16ToString(buf)
-			if title == "" {
-				return 1
-			}
-
-			// Get the PID of the process that owns this window.
-			var pid uint32
-			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-
-			*ptr = append(*ptr, windowInfo{hwnd: win.HWND(hwnd), title: title, pid: pid})
-			return 1 // continue enumeration
-		})
-	})
-
 	var windows []windowInfo
-	procEnumWindows.Call(enumWindowsCallback, uintptr(unsafe.Pointer(&windows)))
+	callback := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		visible, _, _ := procIsWindowVisible.Call(hwnd)
+		if visible == 0 {
+			return 1 // continue enumeration
+		}
+
+		length, _, _ := procGetWindowTextLengthW.Call(hwnd)
+		if length == 0 {
+			return 1
+		}
+
+		buf := make([]uint16, length+1)
+		procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(length+1))
+		title := syscall.UTF16ToString(buf)
+		if title == "" {
+			return 1
+		}
+
+		// Get the PID of the process that owns this window.
+		var pid uint32
+		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		windows = append(windows, windowInfo{hwnd: win.HWND(hwnd), title: title, pid: pid})
+		return 1 // continue enumeration
+	})
+	procEnumWindows.Call(callback, 0)
+	runtime.KeepAlive(callback)
 
 	sort.Slice(windows, func(i, j int) bool {
 		return windows[i].title < windows[j].title

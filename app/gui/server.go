@@ -37,11 +37,13 @@ const (
 )
 
 var (
-	serverMu      sync.Mutex
-	serverCmd     *exec.Cmd
-	serverStarted bool
-	serverPID     int
-	viiperTempDir string
+	serverMu          sync.Mutex
+	serverStartMu     sync.Mutex
+	serverStartCancel context.CancelFunc
+	serverCmd         *exec.Cmd
+	serverStarted     bool
+	serverPID         int
+	viiperTempDir     string
 )
 
 // ---------------------------------------------------------------------------
@@ -87,14 +89,26 @@ func (r *outputRing) tail() []string {
 // ---------------------------------------------------------------------------
 
 func ensureViiperServer(ctx context.Context, log func(string)) (started bool, err error) {
+	// Serialize startup attempts without blocking stopViiperServerIfStarted.
+	// The latter must be able to cancel a startup that is waiting for the
+	// embedded server to become reachable.
+	serverStartMu.Lock()
+	defer serverStartMu.Unlock()
+
+	startupCtx, startupCancel := context.WithCancel(ctx)
 	serverMu.Lock()
-	defer serverMu.Unlock()
+	serverStartCancel = startupCancel
+	serverMu.Unlock()
+	defer func() {
+		serverMu.Lock()
+		serverStartCancel = nil
+		serverMu.Unlock()
+		startupCancel()
+	}()
 
 	addr := runner.DefaultAPIAddr
 
-	// Quick ping with a short timeout — don't hold serverMu while a
-	// stale listener forces TCP to retransmit for minutes.
-	pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
+	pingCtx, pingCancel := context.WithTimeout(startupCtx, 2*time.Second)
 	defer pingCancel()
 	api := viiperclient.New(addr)
 	if _, err := api.PingCtx(pingCtx); err == nil {
@@ -106,7 +120,9 @@ func ensureViiperServer(ctx context.Context, log func(string)) (started bool, er
 	if err != nil {
 		return false, err
 	}
+	serverMu.Lock()
 	viiperTempDir = dir
+	serverMu.Unlock()
 
 	cmd := exec.Command(path, "server")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
@@ -125,24 +141,32 @@ func ensureViiperServer(ctx context.Context, log func(string)) (started bool, er
 	if err := cmd.Start(); err != nil {
 		return false, fmt.Errorf("start server: %w", err)
 	}
+	serverMu.Lock()
 	serverPID = cmd.Process.Pid
+	serverMu.Unlock()
 
 	go forwardOutput(stdout, ring, log, "viiper")
 	go forwardOutput(stderr, ring, log, "viiper")
 
 	log(fmt.Sprintf("Waiting for VIIPER (up to %s)...", serverWaitTime))
-	if err := waitForServer(ctx, addr, serverWaitTime, log); err != nil {
-		killProcessTree(serverPID)
+	if err := waitForServer(startupCtx, addr, serverWaitTime, log); err != nil {
+		serverMu.Lock()
+		pid := serverPID
+		serverPID = 0
+		dir := viiperTempDir
+		viiperTempDir = ""
+		serverMu.Unlock()
+		killProcessTree(pid)
 		_, _ = cmd.Process.Wait() // populate cmd.ProcessState for diagnostics
 		dumpViiperDiagnostics(cmd, ring, addr, log)
-		serverPID = 0
-		_ = os.RemoveAll(viiperTempDir)
-		viiperTempDir = ""
+		_ = os.RemoveAll(dir)
 		return false, err
 	}
 
+	serverMu.Lock()
 	serverCmd = cmd
 	serverStarted = true
+	serverMu.Unlock()
 	return true, nil
 }
 
@@ -299,6 +323,8 @@ func dumpViiperDiagnostics(cmd *exec.Cmd, ring *outputRing, addr string, log fun
 
 func stopViiperServerIfStarted() {
 	serverMu.Lock()
+	startupCancel := serverStartCancel
+	serverStartCancel = nil
 	pid := serverPID
 	started := serverStarted
 	cmd := serverCmd
@@ -309,6 +335,9 @@ func stopViiperServerIfStarted() {
 	viiperTempDir = ""
 	serverMu.Unlock()
 
+	if startupCancel != nil {
+		startupCancel()
+	}
 	if !started || pid <= 0 {
 		return
 	}

@@ -14,9 +14,14 @@ const (
 	PollInterval      = 10 * time.Millisecond
 	MinPollWait       = time.Millisecond
 	CaptureRetryDelay = 50 * time.Millisecond
-	KeyTapHold        = 1 * time.Millisecond
-	KeyBindTimeout    = 5 * time.Second
-	SessionCloseWait  = 10 * time.Second
+	// KeyTapHold must span more than one HID poll. A 1ms key tap can be
+	// overwritten by the release report before the 5ms keyboard endpoint
+	// is polled, causing AutoPot, KeyChain, and TimerKey presses to vanish.
+	// Keep the generic tools faster than the clicker's 20ms hardened tap,
+	// while still giving VIIPER two polling opportunities.
+	KeyTapHold       = 2 * HIDPollInterval
+	KeyBindTimeout   = 5 * time.Second
+	SessionCloseWait = 10 * time.Second
 )
 
 // HIDPollInterval is the USB interrupt polling interval (BInterval) of the

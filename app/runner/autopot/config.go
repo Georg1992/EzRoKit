@@ -40,6 +40,12 @@ type AutoPotConfig struct {
 	Address *AddressConfig // nil = visual mode (pixel/OCR)
 }
 
+func (c *AutoPotConfig) applyDefaults() {
+	if c.Core.Log == nil {
+		c.Core.Log = func(string) {}
+	}
+}
+
 // IsAddressMode reports whether address-reading mode is active.
 func (c AutoPotConfig) IsAddressMode() bool {
 	return c.Address != nil && c.Address.ProcessPID != 0

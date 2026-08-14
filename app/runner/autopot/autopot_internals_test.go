@@ -8,11 +8,19 @@ import (
 	"time"
 )
 
+func TestAutoPotDefaultsMissingLog(t *testing.T) {
+	cfg := AutoPotConfig{Core: CoreConfig{Session: &recordSession{}}}
+	ap := NewAutoPot(cfg)
+	if ap.settings().Core.Log == nil {
+		t.Fatal("NewAutoPot should default a missing logger")
+	}
+}
+
 // ---------------------------------------------------------------------------
-// initReaders tests
+// ReaderFactory.Build tests
 // ---------------------------------------------------------------------------
 
-func TestInitReaders_AddressMode(t *testing.T) {
+func TestReaderFactory_AddressMode(t *testing.T) {
 	// Address mode with a real PID — attempts to create address reader,
 	// but win.GetProcessBaseAddr will fail in test (no such process).
 	// The reader should fall back to visual mode gracefully.
@@ -28,25 +36,25 @@ func TestInitReaders_AddressMode(t *testing.T) {
 	}
 	ap := NewAutoPot(cfg)
 
-	reader, pixel, ocr, isAddress := ap.initReaders(cfg)
+	reader, pixel, ocr, isAddress := NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
 
 	// In test env, win.GetProcessBaseAddr fails → falls back to visual.
 	// This is expected — what matters is that the fallback is clean.
 	if isAddress {
-		t.Log("initReaders: address mode succeeded (real process exists)")
+		t.Log("ReaderFactory.Build: address mode succeeded (real process exists)")
 		return
 	}
-	t.Log("initReaders: address mode fell back to visual (expected in test)")
+	t.Log("ReaderFactory.Build: address mode fell back to visual (expected in test)")
 	if reader == nil {
-		t.Fatal("initReaders: expected non-nil reader after fallback")
+		t.Fatal("ReaderFactory.Build: expected non-nil reader after fallback")
 	}
 	if pixel == nil {
-		t.Error("initReaders: expected non-nil pixelBarReader after fallback")
+		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader after fallback")
 	}
 	_ = ocr // ocr may be nil (no OCR pipeline in some envs)
 }
 
-func TestInitReaders_AddressModeFallback(t *testing.T) {
+func TestReaderFactory_AddressModeFallback(t *testing.T) {
 	// Address mode with PID=0 — should fall back to visual (pixel/OCR).
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
@@ -57,27 +65,27 @@ func TestInitReaders_AddressModeFallback(t *testing.T) {
 	}
 	ap := NewAutoPot(cfg)
 
-	reader, pixel, ocr, isAddress := ap.initReaders(cfg)
+	reader, pixel, ocr, isAddress := NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
 
 	if isAddress {
-		t.Error("initReaders: expected isAddress=false for AddressMode with PID=0")
+		t.Error("ReaderFactory.Build: expected isAddress=false for AddressMode with PID=0")
 	}
 	if reader == nil {
-		t.Fatal("initReaders: expected non-nil reader")
+		t.Fatal("ReaderFactory.Build: expected non-nil reader")
 	}
 	if pixel == nil {
-		t.Error("initReaders: expected non-nil pixelBarReader")
+		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader")
 	}
 	// OCR may be nil if NewDefaultPipeline() fails (no glyphs in some test envs).
 	// That's fine — pixel-only fallback is expected.
 	if ocr != nil {
-		t.Logf("initReaders: OCR reader created (pipeline available)")
+		t.Logf("ReaderFactory.Build: OCR reader created (pipeline available)")
 	} else {
-		t.Log("initReaders: OCR reader nil (pipeline unavailable in test env — expected)")
+		t.Log("ReaderFactory.Build: OCR reader nil (pipeline unavailable in test env — expected)")
 	}
 }
 
-func TestInitReaders_VisualModeNoPID(t *testing.T) {
+func TestReaderFactory_VisualModeNoPID(t *testing.T) {
 	// Visual mode with no address config — pure pixel/OCR path.
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
@@ -88,16 +96,16 @@ func TestInitReaders_VisualModeNoPID(t *testing.T) {
 	}
 	ap := NewAutoPot(cfg)
 
-	reader, pixel, ocr, isAddress := ap.initReaders(cfg)
+	reader, pixel, ocr, isAddress := NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
 
 	if isAddress {
-		t.Error("initReaders: expected isAddress=false for Visual mode")
+		t.Error("ReaderFactory.Build: expected isAddress=false for Visual mode")
 	}
 	if reader == nil {
-		t.Fatal("initReaders: expected non-nil reader")
+		t.Fatal("ReaderFactory.Build: expected non-nil reader")
 	}
 	if pixel == nil {
-		t.Error("initReaders: expected non-nil pixelBarReader")
+		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader")
 	}
 	_ = ocr // ocr may be nil depending on pipeline availability
 }
@@ -437,8 +445,6 @@ func TestPotsEndedTap_TapKeyError(t *testing.T) {
 type errorSession struct{}
 
 func (s *errorSession) TapKey(_ int32, _ time.Duration) error { return fmt.Errorf("session error") }
-func (s *errorSession) Paused() bool                           { return false }
-func (s *errorSession) SetPaused(bool)                         {}
 func (s *errorSession) MouseClick(_ time.Duration) error       { return nil }
 
 // ---------------------------------------------------------------------------
@@ -503,10 +509,10 @@ func TestDispatchVisual_Pixel_BarsNotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrent safety: initReaders + handleDead under -race
+// Concurrent safety: ReaderFactory.Build + handleDead under -race
 // ---------------------------------------------------------------------------
 
-func TestInitReadersConcurrentRace(t *testing.T) {	cfg := AutoPotConfig{
+func TestReaderFactoryConcurrentRace(t *testing.T) {	cfg := AutoPotConfig{
 		Core: CoreConfig{
 			HPThreshold: 50,
 			SPThreshold: 50,
@@ -520,7 +526,7 @@ func TestInitReadersConcurrentRace(t *testing.T) {	cfg := AutoPotConfig{
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _, _ = ap.initReaders(cfg)
+			_, _, _, _ = NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
 		}()
 	}
 	wg.Wait()

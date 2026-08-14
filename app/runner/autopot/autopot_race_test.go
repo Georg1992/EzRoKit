@@ -13,21 +13,7 @@ import (
 
 // mockSession is a session.InputSession for the autopot stress test.
 type mockSession struct {
-	mu       sync.Mutex
-	paused   bool
 	tapCount atomic.Int64
-}
-
-func (m *mockSession) Paused() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.paused
-}
-
-func (m *mockSession) SetPaused(p bool) {
-	m.mu.Lock()
-	m.paused = p
-	m.mu.Unlock()
 }
 
 func (m *mockSession) TapKey(vk int32, hold time.Duration) error {
@@ -42,7 +28,6 @@ func (m *mockSession) MouseClick(_ time.Duration) error { return nil }
 // calls win.CapturePlayerBarSearch(), which fails in a non-game test env
 // and triggers the `continue` branch. That branch still exercises:
 //   - a.settings()        (lifecycle.Settings, RLock on liveMu)
-//   - session.Paused()    (InputSession.RLock in real ViiperSession)
 //   - timing.Sleep        (ctx-aware sleep — Stop works)
 //
 // and the spawned numericValidator goroutine also loops, calling
@@ -97,20 +82,6 @@ func TestAutoPotRunnerStress(t *testing.T) {
 			}
 		}(i)
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		on := false
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(3 * time.Millisecond):
-				on = !on
-				sess.SetPaused(on)
-			}
-		}
-	}()
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {

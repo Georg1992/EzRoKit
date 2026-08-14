@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"reflect"
@@ -203,20 +204,32 @@ func (a *guiApp) bindKeyFlow(
 		return false
 	}
 	a.appendLog(prompt)
+	ctx := a.lifetimeCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var cleanupOnce sync.Once
+	runCleanup := func() { cleanupOnce.Do(cleanup) }
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "PANIC in bindKeyFlow: %v\n%s\n", r, debug.Stack())
-				cleanup()
+				runCleanup()
 			}
 		}()
 		defer func() {
-			cleanup()
+			runCleanup()
+			if ctx.Err() != nil {
+				return
+			}
 			a.mainWindow.Synchronize(func() {
 				reenable()
 			})
 		}()
-		vk, ok := runner.WaitForKeyPress(runner.KeyBindTimeout)
+		vk, ok := runner.WaitForKeyPressContext(ctx, runner.KeyBindTimeout)
+		if ctx.Err() != nil {
+			return
+		}
 		a.mainWindow.Synchronize(func() {
 			if !ok {
 				a.appendLog("Key bind timed out")

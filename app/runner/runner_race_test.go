@@ -9,25 +9,9 @@ import (
 	"belarus-champ-tools/runner/internal/session"
 )
 
-// mockSession is a session.InputSession that counts TapKey calls and
-// supports toggling Paused() concurrently. The Pause/Tap pair is what
-// every runner hot path touches.
+// mockSession is a session.InputSession that counts TapKey calls.
 type mockSession struct {
-	mu       sync.Mutex
-	paused   bool
 	tapCount atomic.Int64
-}
-
-func (m *mockSession) Paused() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.paused
-}
-
-func (m *mockSession) SetPaused(p bool) {
-	m.mu.Lock()
-	m.paused = p
-	m.mu.Unlock()
 }
 
 func (m *mockSession) TapKey(vk int32, hold time.Duration) error {
@@ -87,22 +71,6 @@ func TestTimerKeyRunnerStress(t *testing.T) {
 			}
 		}(i)
 	}
-	// Paused toggler — flips session.Paused() so the run() loop exercises
-	// both branches of the `if session.Paused()` check.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		on := false
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(3 * time.Millisecond):
-				on = !on
-				sess.SetPaused(on)
-			}
-		}
-	}()
 	// Running readers.
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
@@ -180,20 +148,6 @@ func TestKeyChainRunnerStress(t *testing.T) {
 			}
 		}(i)
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		on := false
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(3 * time.Millisecond):
-				on = !on
-				sess.SetPaused(on)
-			}
-		}
-	}()
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -224,14 +178,14 @@ func TestKeyChainRunnerStress(t *testing.T) {
 // Running(), and Paused-toggling from many goroutines. This exercises the
 // cross-runner concurrency that the individual runner stress tests miss:
 //   - Two run() goroutines alive simultaneously, each reading lifecycle
-//     settings (liveMu.RLock) and checking session.Paused()
-//   - External callers writing settings (liveMu.Lock) and toggling Paused()
+//     settings (liveMu.RLock)
+//   - External callers writing settings (liveMu.Lock)
 //   - Direct TapKey calls from multiple goroutines (simulates
 //     clicker+autopot key interleaving on a shared session)
 //
 // The autopot run() loop returns StatusNotFound (no game running), so it
 // does NOT call TapKey — but the direct TapKey callers below exercise
-// the same pattern ViiperSession would see under concurrent TapKey.
+// concurrent writes through the shared session surface.
 func TestClickerAndAutoPotConcurrent(t *testing.T) {
 	sess := &mockSession{}
 
@@ -295,22 +249,6 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 			}
 		}(i)
 	}
-
-	// Paused toggler.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		on := false
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(3 * time.Millisecond):
-				on = !on
-				sess.SetPaused(on)
-			}
-		}
-	}()
 
 	// Running readers for both runners.
 	for i := 0; i < 4; i++ {

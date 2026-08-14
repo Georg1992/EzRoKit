@@ -12,7 +12,6 @@ type orderedClickerSession struct {
 	holds  []time.Duration
 }
 
-func (s *orderedClickerSession) Paused() bool { return false }
 func (s *orderedClickerSession) TapKey(vk int32, hold time.Duration) error {
 	s.mu.Lock()
 	s.events = append(s.events, "key")

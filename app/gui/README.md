@@ -62,7 +62,9 @@ import it from the GUI. The internal packages can move freely
 
 | File | Role |
 |---|---|
-| `main.go` | `guiApp` struct, `main()`, shutdown, `onStart`/`onStop` |
+| `main.go` | `guiApp` struct, `main()`, shutdown, tool lifecycle |
+| `logging.go` | Persistent GUI log, bounded log model, and log-trimmer lifecycle |
+| `viiper_lifecycle.go` | Cancellable VIIPER startup and session wiring |
 | `control_panel.go` | Top Start/Stop buttons + status badge |
 | `clicker_tab.go` | Clicker slot rows, trigger-key binding, delay config |
 | `autopot_tab.go` | HP/SP enable, threshold, hotkey binding |

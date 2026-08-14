@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"belarus-champ-tools/runner/internal/timing"
 )
 
 type clickerEvent struct {
@@ -19,7 +21,6 @@ type clickerTestSession struct {
 	failKeys bool
 }
 
-func (s *clickerTestSession) Paused() bool { return false }
 func (s *clickerTestSession) TapKey(vk int32, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,6 +261,15 @@ func TestClicker_UsesHardenedHoldDurations(t *testing.T) {
 	}
 	if sleepAfter(ClickerSlot{}) != DefaultDelayMs*time.Millisecond {
 		t.Fatalf("invalid delay must use the default")
+	}
+}
+
+func TestSharedKeyTapHoldSpansHIDPoll(t *testing.T) {
+	if timing.KeyTapHold <= timing.HIDPollInterval {
+		t.Fatalf("generic key hold %v must be longer than HID poll %v", timing.KeyTapHold, timing.HIDPollInterval)
+	}
+	if timing.KeyTapHold != 2*timing.HIDPollInterval {
+		t.Fatalf("generic key hold = %v, want two HID polls (%v)", timing.KeyTapHold, 2*timing.HIDPollInterval)
 	}
 }
 

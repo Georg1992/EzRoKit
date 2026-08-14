@@ -48,9 +48,13 @@ type guiApp struct {
 	shutdownOnce  sync.Once
 	bindingActive bool
 	logFile       *os.File
-	starting      atomic.Int32
-	startupCancel context.CancelFunc
-	runner        *runner.Runner
+	starting          atomic.Int32
+	startupGeneration   atomic.Uint64
+	startupCancel       context.CancelFunc
+	viiperStartupCancel context.CancelFunc
+	lifetimeCtx         context.Context
+	lifetimeCancel      context.CancelFunc
+	runner              *runner.Runner
 	autopotRunner *runner.AutoPotRunner
 	timerKeyRunner *runner.TimerKeyRunner
 	keychainRunner *runner.KeyChainRunner
@@ -60,7 +64,12 @@ type guiApp struct {
 }
 
 func main() {
-	app := &guiApp{bindingActive: false}
+	lifetimeCtx, lifetimeCancel := context.WithCancel(context.Background())
+	app := &guiApp{
+		bindingActive:  false,
+		lifetimeCtx:    lifetimeCtx,
+		lifetimeCancel: lifetimeCancel,
+	}
 	defer app.shutdown()
 
 	// Open a persistent log file in a logs/ directory next to the
@@ -85,6 +94,10 @@ func main() {
 func (a *guiApp) shutdown() {
 	a.shutdownOnce.Do(func() {
 		a.mu.Lock()
+		if a.lifetimeCancel != nil {
+			a.lifetimeCancel()
+			a.lifetimeCancel = nil
+		}
 		r := a.runner
 		ap := a.autopotRunner
 		tk := a.timerKeyRunner
@@ -98,6 +111,10 @@ func (a *guiApp) shutdown() {
 		if a.startupCancel != nil {
 			a.startupCancel()
 			a.startupCancel = nil
+		}
+		if a.viiperStartupCancel != nil {
+			a.viiperStartupCancel()
+			a.viiperStartupCancel = nil
 		}
 		a.mu.Unlock()
 
@@ -129,8 +146,8 @@ func (a *guiApp) shutdown() {
 		}
 		if session != nil {
 			session.Close()
-			stopViiperServerIfStarted()
 		}
+		stopViiperServerIfStarted()
 
 		if a.overlay != nil {
 			a.overlay.Destroy()
@@ -216,7 +233,11 @@ func (a *guiApp) setupMainWindow(mw *walk.MainWindow) error {
 // startBackgroundMonitors starts the VIIPER connectivity monitor and the
 // start/stop toggle-key watcher. Both run for the lifetime of the app.
 func (a *guiApp) startBackgroundMonitors() {
-	a.viiperMonitor = startViiperMonitor(context.Background(), func(active bool) {
+	ctx := a.lifetimeCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	a.viiperMonitor = startViiperMonitor(ctx, func(active bool) {
 		a.mainWindow.Synchronize(func() {
 			if active {
 				a.viiperBadge.SetStatus(viiperActive)
@@ -241,7 +262,7 @@ func (a *guiApp) startBackgroundMonitors() {
 		})
 	})
 
-	runner.StartToggleKeyWatcher(context.Background(), func(vk int32) {
+	runner.StartToggleKeyWatcher(ctx, func(vk int32) {
 		a.mainWindow.Synchronize(func() {
 			if a.isStarted() {
 				a.appendLog(fmt.Sprintf("%s pressed — stopping tools", runner.KeyName(vk)))
@@ -341,59 +362,6 @@ func (a *guiApp) isViiperReady() bool {
 	return a.inputSession != nil
 }
 
-// maxLogItems is the maximum number of log entries kept in memory to
-// prevent unbounded memory growth during long sessions.
-const maxLogItems = 500
-
-// setupLogLimit attaches a timer that trims the log items slice on the
-// GUI thread every 30 seconds, ensuring old entries are dropped when the
-// log exceeds maxLogItems. This prevents the in-memory log from growing
-// unboundedly over hours of use.
-func (a *guiApp) setupLogLimit() error {
-	t := time.NewTicker(30 * time.Second)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in log trimmer: %v\n%s\n", r, debug.Stack())
-			}
-		}()
-		defer t.Stop()
-		for range t.C {
-			if a.logList == nil {
-				continue
-			}
-			a.mainWindow.Synchronize(func() {
-				if len(a.logItems) > maxLogItems {
-					excess := len(a.logItems) - maxLogItems
-					a.logItems = a.logItems[excess:]
-					_ = a.logList.SetModel(a.logItems)
-					_ = a.logList.SetCurrentIndex(len(a.logItems) - 1)
-				}
-			})
-		}
-	}()
-	return nil
-}
-
-func (a *guiApp) appendLog(line string) {
-	stamped := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), line)
-
-	// Write to persistent log file (best-effort — file may be missing).
-	if a.logFile != nil {
-		_, _ = a.logFile.WriteString(stamped + "\n")
-	}
-
-	if a.logList == nil {
-		return
-	}
-	a.logItems = append(a.logItems, stamped)
-	// UI update errors are not critical; log display may fail but log entry is recorded
-	_ = a.logList.SetModel(a.logItems)
-	if len(a.logItems) > 0 {
-		_ = a.logList.SetCurrentIndex(len(a.logItems) - 1)
-	}
-}
-
 func (a *guiApp) isStarted() bool {
 	// Fast path: startup in flight — no mutex needed (atomic load).
 	if a.starting.Load() != 0 {
@@ -440,67 +408,6 @@ func (a *guiApp) setToolsStarted(started bool) {
 }
 
 // ---------------------------------------------------------------------------
-// VIIPER lifecycle
-// ---------------------------------------------------------------------------
-
-// onStartViiper starts the VIIPER server and opens an input session. Called
-// from the VIIPER Start button. Runs the blocking startup on a background
-// goroutine so the GUI stays responsive.
-func (a *guiApp) onStartViiper() {
-	a.viiperStartBtn.SetEnabled(false)
-	a.appendLog("Starting VIIPER server...")
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in onStartViiper: %v\n%s\n", r, debug.Stack())
-			}
-		}()
-		logFn := func(s string) {
-			a.mainWindow.Synchronize(func() { a.appendLog(s) })
-		}
-
-		_, err := ensureViiperServer(context.Background(), logFn)
-		if err != nil {
-			a.mainWindow.Synchronize(func() {
-				a.appendLog(fmt.Sprintf("VIIPER start failed: %v", err))
-				a.viiperStartBtn.SetEnabled(true) // retry
-			})
-			return
-		}
-
-		logFn("Opening VIIPER session...")
-		session, err := runner.OpenViiperSession(context.Background(), runner.DefaultAPIAddr, logFn)
-		if err != nil {
-			stopViiperServerIfStarted()
-			a.mainWindow.Synchronize(func() {
-				a.appendLog(fmt.Sprintf("VIIPER session failed: %v", err))
-				a.viiperStartBtn.SetEnabled(true) // retry
-			})
-			return
-		}
-
-		a.mu.Lock()
-		// Close any stale session before replacing it.
-		if a.inputSession != nil {
-			a.inputSession.Close()
-		}
-		a.inputSession = session
-		a.mu.Unlock()
-
-		a.mainWindow.Synchronize(func() {
-			a.viiperBadge.SetStatus(viiperActive)
-			a.appendLog("VIIPER server ready")
-			// VIIPER is running — enable config and Tools Start button.
-			a.setConfigEnabled(true)
-			a.startBtn.SetEnabled(true)
-			a.stopBtn.SetEnabled(false)
-			a.viiperStartBtn.SetEnabled(false) // already running
-		})
-	}()
-}
-
-// ---------------------------------------------------------------------------
 // Tools lifecycle
 // ---------------------------------------------------------------------------
 
@@ -515,7 +422,11 @@ func (a *guiApp) onStart() {
 		a.appendLog("Cannot start tools — VIIPER is not running. Start VIIPER first.")
 		return
 	}
-	if (a.runner != nil && a.runner.Running()) || (a.autopotRunner != nil && a.autopotRunner.Running()) {
+	if a.starting.Load() != 0 ||
+		(a.runner != nil && a.runner.Running()) ||
+		(a.autopotRunner != nil && a.autopotRunner.Running()) ||
+		(a.timerKeyRunner != nil && a.timerKeyRunner.Running()) ||
+		(a.keychainRunner != nil && a.keychainRunner.Running()) {
 		a.mu.Unlock()
 		return
 	}
@@ -530,6 +441,7 @@ func (a *guiApp) onStart() {
 		a.startupCancel()
 		a.startupCancel = nil
 	}
+	generation := a.startupGeneration.Add(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	a.startupCancel = cancel
 	a.starting.Store(1)
@@ -539,12 +451,12 @@ func (a *guiApp) onStart() {
 	a.setToolsStarted(true)
 	a.appendLog("Starting tools...")
 
-	go a.startInBackground(ctx)
+	go a.startInBackground(ctx, generation)
 }
 
 // startInBackground runs the long-running tools startup work off the GUI
 // thread. VIIPER is already running — this only wires up the runners.
-func (a *guiApp) startInBackground(ctx context.Context) {
+func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 	logFn := func(s string) {
 		a.mainWindow.Synchronize(func() { a.appendLog(s) })
 	}
@@ -552,7 +464,7 @@ func (a *guiApp) startInBackground(ctx context.Context) {
 		if ctx.Err() != nil {
 			return false
 		}
-		return a.starting.Load() != 0
+		return a.starting.Load() != 0 && a.startupGeneration.Load() == generation
 	}
 	finishFailure := func() {
 		if ctx.Err() != nil {
@@ -605,7 +517,9 @@ func (a *guiApp) startInBackground(ctx context.Context) {
 		return
 	}
 
-	a.startRemainingRunners(session, logFn)
+	if !a.startRemainingRunners(ctx, generation, session, logFn) {
+		return
+	}
 
 	// atomically read+clear the starting flag so onStop can't race
 	// between the two operations.
@@ -619,7 +533,21 @@ func (a *guiApp) startInBackground(ctx context.Context) {
 }
 
 // startRemainingRunners starts AutoPot, TimerKey, and KeyChain runners.
-func (a *guiApp) startRemainingRunners(session runner.InputSession, logFn func(string)) {
+func (a *guiApp) startRemainingRunners(ctx context.Context, generation uint64, session runner.InputSession, logFn func(string)) bool {
+	stillStarting := func() bool {
+		return ctx.Err() == nil && a.starting.Load() != 0 && a.startupGeneration.Load() == generation
+	}
+	stopIfCancelled := func() bool {
+		if stillStarting() {
+			return false
+		}
+		a.stopStartedRunners()
+		return true
+	}
+
+	if stopIfCancelled() {
+		return false
+	}
 	autopotCfg := a.autopot.wanted(a.autopotModeFn(), a.autopotStatusFn(), logFn)
 	autopotCfg.Core.Session = session
 	autopotCfg.Core.Log = logFn
@@ -633,6 +561,9 @@ func (a *guiApp) startRemainingRunners(session runner.InputSession, logFn func(s
 
 	a.autopot.prevAutoPotAddressMode = autopotCfg.IsAddressMode()
 	a.startAutoPotRunner(autopotCfg, logFn)
+	if stopIfCancelled() {
+		return false
+	}
 
 	// If no autopot keys are bound, show "AutoPot off" instead of a stale mode.
 	if !autopotCfg.Core.HPEnabled && !autopotCfg.Core.SPEnabled {
@@ -644,7 +575,47 @@ func (a *guiApp) startRemainingRunners(session runner.InputSession, logFn func(s
 	}
 
 	a.startTimerKeyRunner(timerCfg, logFn)
+	if stopIfCancelled() {
+		return false
+	}
 	a.startKeyChainRunner(keyChainCfg, logFn)
+	if stopIfCancelled() {
+		return false
+	}
+	return true
+}
+
+// stopStartedRunners takes ownership of every currently published runner and
+// waits for each one to finish. It is used when startup is cancelled after a
+// subset of the tools has already been started.
+func (a *guiApp) stopStartedRunners() {
+	a.mu.Lock()
+	r := a.runner
+	ap := a.autopotRunner
+	tk := a.timerKeyRunner
+	kc := a.keychainRunner
+	a.runner = nil
+	a.autopotRunner = nil
+	a.timerKeyRunner = nil
+	a.keychainRunner = nil
+	a.mu.Unlock()
+
+	if r != nil {
+		r.Stop()
+		r.Wait()
+	}
+	if ap != nil {
+		ap.Stop()
+		ap.Wait()
+	}
+	if tk != nil {
+		tk.Stop()
+		tk.Wait()
+	}
+	if kc != nil {
+		kc.Stop()
+		kc.Wait()
+	}
 }
 
 // onStop stops all tools but keeps the VIIPER session alive so the next
@@ -663,7 +634,8 @@ func (a *guiApp) onStop() {
 	a.keychainRunner = nil
 	// Keep a.inputSession alive so the next Start reuses it.
 	// Full cleanup (Close) happens in shutdown().
-	// Cancel any in-flight startup goroutine.
+	// Invalidate any in-flight startup goroutine before releasing the lock.
+	a.startupGeneration.Add(1)
 	a.starting.Store(0)
 	if a.startupCancel != nil {
 		a.startupCancel()

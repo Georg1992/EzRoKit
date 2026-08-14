@@ -38,6 +38,7 @@ type AutoPotRunner struct {
 
 // NewAutoPot constructs an AutoPotRunner with the given initial config.
 func NewAutoPot(cfg AutoPotConfig) *AutoPotRunner {
+	cfg.applyDefaults()
 	return &AutoPotRunner{
 		lc: lifecycle.New(
 			cfg,
@@ -65,6 +66,7 @@ func (a *AutoPotRunner) Running() bool { return a.lc.Running() }
 func (a *AutoPotRunner) UpdateSettings(cfg AutoPotConfig) {
 	old := a.settings()
 	cfg.Core.Log = old.Core.Log
+	cfg.applyDefaults()
 	cfg.Core.OnStatusParsed = old.Core.OnStatusParsed
 	cfg.Core.OnStatusUIMode = old.Core.OnStatusUIMode
 	cfg.Core.Session = old.Core.Session
@@ -118,16 +120,6 @@ func (a *AutoPotRunner) run(ctx context.Context, cfg AutoPotConfig) {
 	factory := NewReaderFactory(a.settings, a.hpStabilizer, a.spStabilizer)
 	reader, pixel, ocr, isAddress := factory.Build()
 	a.mainLoop(ctx, reader, pixel, ocr, isAddress)
-}
-
-// initReaders creates the appropriate BarReader(s) based on the config.
-// Returns the primary reader, pixel fallback, OCR reader, and isAddress flag.
-//
-// DEPRECATED: logic moved to ReaderFactory.Build(). Kept as a thin wrapper
-// for backward compat with tests that call initReaders directly.
-func (a *AutoPotRunner) initReaders(_ AutoPotConfig) (reader BarReader, pixel *pixelBarReader, ocr *statusUIReader, isAddress bool) {
-	factory := NewReaderFactory(a.settings, a.hpStabilizer, a.spStabilizer)
-	return factory.Build()
 }
 
 // mainLoop is the core autopot polling loop. It reads HP/SP, dispatches
