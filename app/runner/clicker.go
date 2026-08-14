@@ -273,6 +273,3 @@ func slotDelay(slot ClickerSlot) time.Duration {
 	}
 	return time.Duration(delayMs) * time.Millisecond
 }
-
-// sleepAfter names the one inter-cycle sleep for tests and documentation.
-func sleepAfter(slot ClickerSlot) time.Duration { return slotDelay(slot) }

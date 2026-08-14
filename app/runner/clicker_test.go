@@ -256,10 +256,10 @@ func TestClicker_UsesHardenedHoldDurations(t *testing.T) {
 	if ClickerClickHold < 2*5*time.Millisecond {
 		t.Fatalf("mouse hold %v is too short for HID visibility", ClickerClickHold)
 	}
-	if sleepAfter(ClickerSlot{DelayMs: 77}) != 77*time.Millisecond {
-		t.Fatalf("sleepAfter must use the configured delay")
+	if slotDelay(ClickerSlot{DelayMs: 77}) != 77*time.Millisecond {
+		t.Fatalf("slotDelay must use the configured delay")
 	}
-	if sleepAfter(ClickerSlot{}) != DefaultDelayMs*time.Millisecond {
+	if slotDelay(ClickerSlot{}) != DefaultDelayMs*time.Millisecond {
 		t.Fatalf("invalid delay must use the default")
 	}
 }
