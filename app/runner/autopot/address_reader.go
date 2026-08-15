@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"belarus-champ-tools/runner/profiles"
+	"ezrokit/runner/profiles"
 	"golang.org/x/sys/windows"
 )
 

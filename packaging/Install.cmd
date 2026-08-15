@@ -1,21 +1,21 @@
 @echo off
 setlocal
-title Belarus Champ Tools Setup
+title EzRoKit Setup
 cd /d "%~dp0"
 
-set "BCT_INSTALL_DIR=%~dp0"
-set "BCT_CMD_PATH=%~f0"
-set "BCT_TMPPS1=%TEMP%\belarus-champ-tools-%RANDOM%.ps1"
-set "BCT_SKIP=0"
-for /f "tokens=1 delims=:" %%A in ('findstr /n /b ":PS1" "%~f0"') do set "BCT_SKIP=%%A"
+set "ERK_INSTALL_DIR=%~dp0"
+set "ERK_CMD_PATH=%~f0"
+set "ERK_TMPPS1=%TEMP%\ezrokit-%RANDOM%.ps1"
+set "ERK_SKIP=0"
+for /f "tokens=1 delims=:" %%A in ('findstr /n /b ":PS1" "%~f0"') do set "ERK_SKIP=%%A"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$skip = [int]$env:BCT_SKIP; $lines = [IO.File]::ReadAllLines($env:BCT_CMD_PATH); $body = ($lines | Select-Object -Skip $skip) -join [Environment]::NewLine; [IO.File]::WriteAllText($env:BCT_TMPPS1, $body, [Text.UTF8Encoding]::new($false))"
+  "$skip = [int]$env:ERK_SKIP; $lines = [IO.File]::ReadAllLines($env:ERK_CMD_PATH); $body = ($lines | Select-Object -Skip $skip) -join [Environment]::NewLine; [IO.File]::WriteAllText($env:ERK_TMPPS1, $body, [Text.UTF8Encoding]::new($false))"
 if errorlevel 1 goto fail
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BCT_TMPPS1%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ERK_TMPPS1%"
 set ERR=%ERRORLEVEL%
-del "%BCT_TMPPS1%" 2>nul
+del "%ERK_TMPPS1%" 2>nul
 if %ERR% neq 0 goto fail
 goto done
 
@@ -32,9 +32,9 @@ exit /b %ERR%
 :PS1
 $ErrorActionPreference = "Stop"
 
-$InstallDir = $env:BCT_INSTALL_DIR.TrimEnd('\')
-$AppDisplayName = "Belarus Champ Tools"
-$AppExeName = "Belarus Champ Tools.exe"
+$InstallDir = $env:ERK_INSTALL_DIR.TrimEnd('\')
+$AppDisplayName = "EzRoKit"
+$AppExeName = "EzRoKit.exe"
 $SourceExe = Join-Path $InstallDir $AppExeName
 
 Write-Host ""
@@ -117,7 +117,7 @@ Write-Host "Setup complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next:" -ForegroundColor Cyan
 Write-Host "  1. Restart your PC if you were asked to (first-time setup only)"
-Write-Host "  2. Double-click Belarus Champ Tools.exe in this folder"
+Write-Host "  2. Double-click EzRoKit.exe in this folder"
 Write-Host "  3. Click Start, add a trigger key, then open your game"
 Write-Host ""
 

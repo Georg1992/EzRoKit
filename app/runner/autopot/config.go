@@ -3,8 +3,8 @@ package autopot
 import (
 	"fmt"
 
-	"belarus-champ-tools/runner/internal/session"
-	"belarus-champ-tools/runner/profiles"
+	"ezrokit/runner/internal/session"
+	"ezrokit/runner/profiles"
 )
 
 // CoreConfig holds the shared configuration used by all BarReader

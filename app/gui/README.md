@@ -36,10 +36,10 @@ sibling packages.
 **`app/gui` must only import `app/runner` (the public facade).**
 It must never import any of the internal subpackages directly:
 
-- ❌ `belarus-champ-tools/runner/autopot`
-- ❌ `belarus-champ-tools/runner/autopot/statusui`
-- ❌ `belarus-champ-tools/runner/internal/...`
-- ❌ `belarus-champ-tools/runner/platform/...`
+- ❌ `ezrokit/runner/autopot`
+- ❌ `ezrokit/runner/autopot/statusui`
+- ❌ `ezrokit/runner/internal/...`
+- ❌ `ezrokit/runner/platform/...`
 
 If you find yourself wanting to import one of these, you have hit a
 genuine API gap. **Add the missing surface to `runner` first**, then
@@ -65,7 +65,8 @@ import it from the GUI. The internal packages can move freely
 | `main.go` | `guiApp` struct, `main()`, shutdown, tool lifecycle |
 | `logging.go` | Persistent GUI log, bounded log model, and log-trimmer lifecycle |
 | `viiper_lifecycle.go` | Cancellable VIIPER startup and session wiring |
-| `control_panel.go` | Top Start/Stop buttons + status badge |
+| `control_panel.go` | Top Start/Stop buttons + status badge + tool profiles |
+| `tool_profiles.go` | Persistent profiles for all tool bindings and settings |
 | `clicker_tab.go` | Clicker slot rows, trigger-key binding, delay config |
 | `autopot_tab.go` | HP/SP enable, threshold, hotkey binding |
 | `keychain_tab.go` | KeyChain slot rows + hotkey binding |
@@ -74,7 +75,8 @@ import it from the GUI. The internal packages can move freely
 | `server.go` | Embedded VIIPER HTTP server start/stop |
 | `status_badge.go` | Stopped/Running pill widget |
 | `keychain_arrows.go` | Arrow icons on the KeyChain tab |
-| `flag.go` | Belarus flag asset (window icon) |
+| `branding.go` | EzRoKit window icon |
+| `style.go` | Shared styling: gray hints, aligned labels, fixed-width buttons |
 | `prereq_windows.go` | Windows-specific prereq checks |
 | `app.manifest` | Windows manifest (HiDPI, etc.) |
 | `embed/` | Embedded resources |
@@ -99,12 +101,12 @@ intact:
 
 ```bash
 # Should print nothing.
-grep -rn 'belarus-champ-tools/runner/' --include='*.go' app/gui/ \
-  | grep -v 'belarus-champ-tools/runner"' \
-  | grep -v 'belarus-champ-tools/runner/auto' \
-  | grep -v 'belarus-champ-tools/runner/status' \
-  | grep -v 'belarus-champ-tools/runner/internal' \
-  | grep -v 'belarus-champ-tools/runner/platform'
+grep -rn 'ezrokit/runner/' --include='*.go' app/gui/ \
+  | grep -v 'ezrokit/runner"' \
+  | grep -v 'ezrokit/runner/auto' \
+  | grep -v 'ezrokit/runner/status' \
+  | grep -v 'ezrokit/runner/internal' \
+  | grep -v 'ezrokit/runner/platform'
 ```
 
 (Replace the grep with the exact import paths you forbid.)

@@ -1,11 +1,11 @@
-# BELARUS CHAMP TOOLS
+# EzRoKit
 
 Windows tools suite with a Walk GUI — clicker, autopot, keychain, and timer keys. All input is routed through embedded [VIIPER](https://github.com/Alia5/VIIPER) virtual HID devices.
 
 ## Project layout
 
 ```
-Belarus_Champ_Tools/
+EzRoKit/
   app.exe                       ← dev build output
   app/
     build.ps1                    ← build app.exe
@@ -16,12 +16,12 @@ Belarus_Champ_Tools/
     README.txt / README.ru.txt
     Install.cmd / Uninstall.cmd
   release/                           ← build output only (folder + zip)
-    BelarusChampTools-Windows-x64/
-    BelarusChampTools-Windows-x64.zip
+    EzRoKit-Windows-x64/
+    EzRoKit-Windows-x64.zip
   VIIPER/                        ← git submodule
 ```
 
-Open **`Belarus_Champ_Tools`** in your editor — not the `VIIPER/` folder alone.
+Open **`EzRoKit`** in your editor — not the `VIIPER/` folder alone.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ cd app
 .\package.ps1
 ```
 
-Output: `release/BelarusChampTools-Windows-x64/` and `release/BelarusChampTools-Windows-x64.zip`
+Output: `release/EzRoKit-Windows-x64/` and `release/EzRoKit-Windows-x64.zip`
 
 Users extract the ZIP and run `Install.cmd`. See `packaging/README.txt`.
 
@@ -93,10 +93,9 @@ While the trigger key is held, each bind repeats one of these exact flows:
 - **Mouse disabled:** virtual key click (held ~20 ms) → sleep for **Delay ms**
 
 The Delay setting is always after the final action. Each assigned key has its
-own clicker state. If multiple keys are held, the first key observed pressed
-gets priority; the others wait without firing until the active key is
-released, then the earliest waiting key takes over. A failed key write cannot
-produce a mouse-only click.
+own clicker state. If multiple binds are held, they run independently; pressing
+another key does not stop or take over an existing clicker cycle. A failed key
+write cannot produce a mouse-only click.
 
 Default delay: **50 ms**. If a game misses clicks, try **50–100 ms**.
 

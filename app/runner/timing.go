@@ -8,7 +8,7 @@
 package runner
 
 import (
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 )
 
 var (

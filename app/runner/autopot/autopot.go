@@ -10,8 +10,8 @@ import (
 	"context"
 	"fmt"
 
-	"belarus-champ-tools/runner/internal/lifecycle"
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/lifecycle"
+	"ezrokit/runner/internal/timing"
 )
 
 // AutoPotRunner heals HP/SP based on readings from the active BarReader.

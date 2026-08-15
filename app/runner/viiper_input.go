@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 
 	"github.com/Alia5/VIIPER/device/keyboard"
 	"github.com/Alia5/VIIPER/device/mouse"
@@ -14,15 +14,17 @@ import (
 // Reset releases all keys and mouse buttons without closing streams, removing
 // devices, or removing the bus. The session stays reusable after a Stop.
 func (s *ViiperSession) Reset() {
-	s.writeMu.Lock()
+	s.keyMu.Lock()
 	_ = keyUpLocked(s.keyStream)
+	s.keyMu.Unlock()
+	s.mouseMu.Lock()
 	_ = mouseUpLocked(s.mouseStream)
-	s.writeMu.Unlock()
+	s.mouseMu.Unlock()
 }
 
 func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
 	if err := keyDownLocked(s.keyStream, vk); err != nil {
 		return err
 	}
@@ -30,24 +32,9 @@ func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
 	return keyUpLocked(s.keyStream)
 }
 
-// ClickerCycle emits key click -> optional mouse click while holding the wire
-// lock for both actions. This prevents another runner from inserting an input
-// event between the clicker's required key and mouse portions.
-func (s *ViiperSession) ClickerCycle(vk int32, keyHold, mouseHold time.Duration) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := keyDownLocked(s.keyStream, vk); err != nil {
-		return err
-	}
-	if err := keyUpAfterLocked(s.keyStream, keyHold); err != nil {
-		return err
-	}
-	return mouseClickLocked(s.mouseStream, mouseHold)
-}
-
 func (s *ViiperSession) MouseClick(hold time.Duration) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	s.mouseMu.Lock()
+	defer s.mouseMu.Unlock()
 	return mouseClickLocked(s.mouseStream, hold)
 }
 
@@ -87,11 +74,6 @@ func keyDownLocked(stream *viiperclient.DeviceStream, vk int32) error {
 func keyUpLocked(stream *viiperclient.DeviceStream) error {
 	release := keyboard.Release()
 	return stream.WriteBinary(&release)
-}
-
-func keyUpAfterLocked(stream *viiperclient.DeviceStream, hold time.Duration) error {
-	time.Sleep(hold)
-	return keyUpLocked(stream)
 }
 
 func mouseDownLocked(stream *viiperclient.DeviceStream) error {

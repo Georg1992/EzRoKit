@@ -6,7 +6,7 @@
 // the topmost layer of a three-layer architecture; see README.md in
 // this directory for the full layering rules and the import boundary.
 //
-// Quick rule: this package must only import `belarus-champ-tools/runner`
+// Quick rule: this package must only import `ezrokit/runner`
 // (the public facade). Never import `runner/autopot`, `runner/autopot/statusui`,
 // `runner/internal/...`, or `runner/platform/...` directly — add the
 // missing surface to `runner` first, then consume it here.
@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 
 	"github.com/lxn/walk"
 )
@@ -36,6 +36,7 @@ type guiApp struct {
 	timer    timerController
 	autopot  autopotController
 	keychain keychainController
+	profiles toolProfileController
 
 	// Control panel
 	startBtn       *walk.PushButton // Tools Start
@@ -43,24 +44,26 @@ type guiApp struct {
 	viiperStartBtn *walk.PushButton // VIIPER Start
 	toolsBadge     *toolsBadge
 	viiperBadge    *viiperBadge
+	profileLogRow  *walk.Composite
 
-	mu            sync.Mutex
-	shutdownOnce  sync.Once
-	bindingActive bool
-	logFile       *os.File
-	starting          atomic.Int32
+	mu                  sync.Mutex
+	shutdownOnce        sync.Once
+	bindingActive       bool
+	logFile             *os.File
+	starting            atomic.Int32
 	startupGeneration   atomic.Uint64
 	startupCancel       context.CancelFunc
 	viiperStartupCancel context.CancelFunc
 	lifetimeCtx         context.Context
 	lifetimeCancel      context.CancelFunc
 	runner              *runner.Runner
-	autopotRunner *runner.AutoPotRunner
-	timerKeyRunner *runner.TimerKeyRunner
-	keychainRunner *runner.KeyChainRunner
-	inputSession   *runner.ViiperSession
-	overlay        *statusOverlay
-	viiperMonitor  *viiperMonitor
+	autopotRunner       *runner.AutoPotRunner
+	timerKeyRunner      *runner.TimerKeyRunner
+	keychainRunner      *runner.KeyChainRunner
+	inputSession        *runner.ViiperSession
+	overlay             *statusOverlay
+	viiperMonitor       *viiperMonitor
+	profileApplying     bool
 }
 
 func main() {
@@ -87,7 +90,7 @@ func main() {
 	}
 
 	if err := app.createWindow(); err != nil {
-		walk.MsgBox(nil, "BELARUS CHAMP TOOLS", err.Error(), walk.MsgBoxIconError)
+		walk.MsgBox(nil, "EzRoKit", err.Error(), walk.MsgBoxIconError)
 	}
 }
 
@@ -172,6 +175,9 @@ func (a *guiApp) createWindow() error {
 	if err := a.initLogArea(mw); err != nil {
 		return err
 	}
+	if err := a.initToolProfiles(); err != nil {
+		return err
+	}
 	a.wireClosingHandler(mw)
 	a.setInitialState()
 	a.onStartViiper()
@@ -200,7 +206,7 @@ func (a *guiApp) setupMainWindow(mw *walk.MainWindow) error {
 	if err := a.setupLogLimit(); err != nil {
 		return err
 	}
-	if err := mw.SetTitle("BELARUS CHAMP TOOLS"); err != nil {
+	if err := mw.SetTitle("EzRoKit"); err != nil {
 		return err
 	}
 	if err := mw.SetMinMaxSize(walk.Size{Width: 780, Height: 600}, walk.Size{}); err != nil {
@@ -217,14 +223,11 @@ func (a *guiApp) setupMainWindow(mw *walk.MainWindow) error {
 		return err
 	}
 
-	icon, err := walk.NewIconFromImageForDPI(belarusFlagImage(), 96)
+	icon, err := walk.NewIconFromImageForDPI(ezrokitIconImage(), 96)
 	if err != nil {
 		return err
 	}
 	if err := mw.SetIcon(icon); err != nil {
-		return err
-	}
-	if err := addBelarusHeader(mw); err != nil {
 		return err
 	}
 	return a.buildControlPanel(mw)
@@ -312,21 +315,31 @@ func (a *guiApp) initTabs(mw *walk.MainWindow) error {
 	return nil
 }
 
-// initLogArea creates the log label and list box at the bottom of the window.
+// initLogArea creates the Logs panel beside the Profiles controls.
 func (a *guiApp) initLogArea(mw *walk.MainWindow) error {
-	logLabel, err := walk.NewLabel(mw)
+	parent := walk.Container(mw)
+	if a.profileLogRow != nil {
+		parent = a.profileLogRow
+	}
+
+	logGB, err := walk.NewGroupBox(parent)
 	if err != nil {
 		return err
 	}
-	if err := logLabel.SetText("Logs"); err != nil {
+	if err := logGB.SetTitle("Logs"); err != nil {
+		return err
+	}
+	logLayout := walk.NewVBoxLayout()
+	logLayout.SetSpacing(4)
+	if err := logGB.SetLayout(logLayout); err != nil {
 		return err
 	}
 
-	a.logList, err = walk.NewListBox(mw)
+	a.logList, err = walk.NewListBox(logGB)
 	if err != nil {
 		return err
 	}
-	if err := a.logList.SetMinMaxSize(walk.Size{Width: 0, Height: 140}, walk.Size{}); err != nil {
+	if err := a.logList.SetMinMaxSize(walk.Size{Width: 300, Height: 140}, walk.Size{}); err != nil {
 		return err
 	}
 	a.logItems = make([]string, 0, maxLogItems)
@@ -769,6 +782,9 @@ func (a *guiApp) unsetKeyBinding(vk int32) {
 }
 
 func (a *guiApp) syncRunnerSettings() {
+	if a.profileApplying {
+		return
+	}
 	cfg := a.clicker.config(a.appendLog)
 	a.mu.Lock()
 	r := a.runner

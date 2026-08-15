@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"belarus-champ-tools/runner/internal/lifecycle"
-	"belarus-champ-tools/runner/internal/session"
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/lifecycle"
+	"ezrokit/runner/internal/session"
+	"ezrokit/runner/internal/timing"
 )
 
 const (
@@ -28,18 +28,23 @@ const (
 	// ensure the mouse-down report is transmitted before mouse-up.
 	ClickerClickHold = 2 * timing.HIDPollInterval
 
+	// ClickerReleaseGrace is a single polling interval. Release must be
+	// fail-safe: an uncertain trigger state stops output rather than risking
+	// continued input after the user lets go.
+	ClickerReleaseGrace = timing.PollInterval
+
 	clickerTriggerCount = ClickerSlotCount * ClickerKeysPerBind
 )
 
 // ClickerSlot is one bind row. Every non-zero trigger key has its own
-// clicker state and repeat deadline. The first pressed held key owns output;
-// other held keys wait in press order until the owner is released.
+// clicker state and repeat deadline. Held trigger keys are independent:
+// pressing another key does not take ownership or stop an existing cycle.
 //
 //	MouseClick=true:  key click -> mouse click -> DelayMs sleep
 //	MouseClick=false: key click -> DelayMs sleep
 //
 // DelayMs is always after the final action. A key release during a cycle does
-// not interrupt that cycle; ownership is handed off after the cycle ends.
+// not interrupt that cycle.
 type ClickerSlot struct {
 	TriggerVKs [ClickerKeysPerBind]int32
 	DelayMs    int
@@ -119,26 +124,23 @@ func KeysText(vks [ClickerKeysPerBind]int32) string {
 }
 
 type clickerKeyState struct {
-	vk        int32
-	down      bool
-	pressedAt time.Time
-	nextDue   time.Time
-	pressSeq  uint64
+	vk         int32
+	down       bool
+	releasedAt time.Time
+	nextDue    time.Time
 }
 
-// run maintains independent state for every configured key. Only owner may
-// emit input; owner is selected by first observed press and remains stable
-// until that key is observed released. This prevents keys from racing while
-// preserving a deterministic handoff to the next held key.
+// run keeps one bounded synchronous loop. Trigger release is checked between
+// cycles and a release during a cycle prevents the next cycle. There are no
+// per-cycle goroutines to leak or outlive the runner.
 func (r *Runner) run(ctx context.Context, _ Config) {
 	var states [clickerTriggerCount]clickerKeyState
-	var pressSeq uint64
-	owner := -1
 
 	for ctx.Err() == nil {
 		current := r.settings()
 		now := time.Now()
 		anyMapped := false
+		nextWake := time.Time{}
 
 		for i := range states {
 			bi := i / ClickerKeysPerBind
@@ -148,9 +150,6 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 
 			if vk != state.vk {
 				*state = clickerKeyState{vk: vk}
-				if owner == i {
-					owner = -1
-				}
 			}
 			if vk == 0 {
 				continue
@@ -158,46 +157,47 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 			anyMapped = true
 
 			down := PhysicalKeyDown(vk)
-			if down && !state.down {
-				pressSeq++
-				state.down = true
-				state.pressedAt = now
-				state.nextDue = now
-				state.pressSeq = pressSeq
-			} else if !down && state.down {
-				state.down = false
-				state.pressedAt = time.Time{}
-				state.nextDue = time.Time{}
-				if owner == i {
-					owner = -1
+			if down {
+				if !state.down {
+					state.down = true
+					state.nextDue = now
+				}
+				state.releasedAt = time.Time{}
+			} else if state.down {
+				if state.releasedAt.IsZero() {
+					state.releasedAt = now
+				} else if now.Sub(state.releasedAt) >= ClickerReleaseGrace {
+					state.down = false
+					state.releasedAt = time.Time{}
+					state.nextDue = time.Time{}
 				}
 			}
+			if !state.down {
+				continue
+			}
+
+			if state.nextDue.IsZero() || !now.Before(state.nextDue) {
+				slot := current.Slots[bi]
+				if r.fireCycle(ctx, current.Session, current.Log, slot, vk) {
+					return
+				}
+				state.nextDue = time.Now().Add(slotDelay(slot))
+			}
+
+			if nextWake.IsZero() || state.nextDue.Before(nextWake) {
+				nextWake = state.nextDue
+			}
 		}
 
-		if owner < 0 {
-			owner = firstPressedKey(states[:])
-		}
-		if owner < 0 {
-			if anyMapped {
-				timing.Sleep(ctx, timing.PollInterval)
-			} else {
-				timing.Sleep(ctx, timing.CaptureRetryDelay)
-			}
+		if !anyMapped {
+			timing.Sleep(ctx, timing.CaptureRetryDelay)
 			continue
 		}
-
-		state := &states[owner]
-		slot := current.Slots[owner/ClickerKeysPerBind]
-		if state.nextDue.IsZero() || !now.Before(state.nextDue) {
-			if r.fireCycle(ctx, current.Session, current.Log, slot, state.vk) {
-				return
-			}
-			// This deadline belongs only to the owner. Waiting keys keep
-			// their own press sequence and are not reset or advanced.
-			state.nextDue = time.Now().Add(slotDelay(slot))
+		if nextWake.IsZero() {
+			timing.Sleep(ctx, timing.PollInterval)
+			continue
 		}
-
-		wait := time.Until(state.nextDue)
+		wait := time.Until(nextWake)
 		if wait < timing.MinPollWait {
 			wait = timing.MinPollWait
 		}
@@ -208,45 +208,10 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 	}
 }
 
-func firstPressedKey(states []clickerKeyState) int {
-	owner := -1
-	var earliest uint64
-	for i, state := range states {
-		if !state.down || state.pressSeq == 0 {
-			continue
-		}
-		if owner < 0 || state.pressSeq < earliest {
-			owner = i
-			earliest = state.pressSeq
-		}
-	}
-	return owner
-}
-
-// fireCycle emits either key click -> mouse click or the key-only variant.
-// It returns true when cancellation was observed and the runner should stop
-// without beginning another action.
+// fireCycle emits a key tap and, when enabled, a mouse click. The two
+// operations use the same simple InputSession API as every other runner.
+// It returns true when cancellation was observed and the runner should stop.
 func (r *Runner) fireCycle(ctx context.Context, sess session.InputSession, log func(string), slot ClickerSlot, vk int32) bool {
-	if !slot.MouseClick {
-		if err := sess.TapKey(vk, ClickerKeyTapHold); err != nil {
-			if ctx.Err() != nil {
-				return true
-			}
-			log(fmt.Sprintf("clicker key %s failed: %v", KeyName(vk), err))
-		}
-		return false
-	}
-
-	if cycle, ok := sess.(session.ClickerCycleSession); ok {
-		if err := cycle.ClickerCycle(vk, ClickerKeyTapHold, ClickerClickHold); err != nil {
-			if ctx.Err() != nil {
-				return true
-			}
-			log(fmt.Sprintf("clicker cycle for key %s failed: %v", KeyName(vk), err))
-		}
-		return false
-	}
-
 	if err := sess.TapKey(vk, ClickerKeyTapHold); err != nil {
 		if ctx.Err() != nil {
 			return true
@@ -254,8 +219,8 @@ func (r *Runner) fireCycle(ctx context.Context, sess session.InputSession, log f
 		log(fmt.Sprintf("clicker key %s failed: %v", KeyName(vk), err))
 		return false
 	}
-	if ctx.Err() != nil {
-		return true
+	if !slot.MouseClick || ctx.Err() != nil {
+		return ctx.Err() != nil
 	}
 	if err := sess.MouseClick(ClickerClickHold); err != nil {
 		if ctx.Err() != nil {

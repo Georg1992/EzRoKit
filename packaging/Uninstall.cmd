@@ -1,21 +1,21 @@
 @echo off
 setlocal
-title Belarus Champ Tools Uninstall
+title EzRoKit Uninstall
 cd /d "%~dp0"
 
-set "BCT_INSTALL_DIR=%~dp0"
-set "BCT_CMD_PATH=%~f0"
-set "BCT_TMPPS1=%TEMP%\belarus-champ-tools-uninstall-%RANDOM%.ps1"
-set "BCT_SKIP=0"
-for /f "tokens=1 delims=:" %%A in ('findstr /n /b ":PS1" "%~f0"') do set "BCT_SKIP=%%A"
+set "ERK_INSTALL_DIR=%~dp0"
+set "ERK_CMD_PATH=%~f0"
+set "ERK_TMPPS1=%TEMP%\ezrokit-uninstall-%RANDOM%.ps1"
+set "ERK_SKIP=0"
+for /f "tokens=1 delims=:" %%A in ('findstr /n /b ":PS1" "%~f0"') do set "ERK_SKIP=%%A"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$skip = [int]$env:BCT_SKIP; $lines = [IO.File]::ReadAllLines($env:BCT_CMD_PATH); $body = ($lines | Select-Object -Skip $skip) -join [Environment]::NewLine; [IO.File]::WriteAllText($env:BCT_TMPPS1, $body, [Text.UTF8Encoding]::new($false))"
+  "$skip = [int]$env:ERK_SKIP; $lines = [IO.File]::ReadAllLines($env:ERK_CMD_PATH); $body = ($lines | Select-Object -Skip $skip) -join [Environment]::NewLine; [IO.File]::WriteAllText($env:ERK_TMPPS1, $body, [Text.UTF8Encoding]::new($false))"
 if errorlevel 1 goto fail
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BCT_TMPPS1%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ERK_TMPPS1%"
 set ERR=%ERRORLEVEL%
-del "%BCT_TMPPS1%" 2>nul
+del "%ERK_TMPPS1%" 2>nul
 if %ERR% neq 0 goto fail
 goto done
 
@@ -32,15 +32,16 @@ exit /b %ERR%
 :PS1
 $ErrorActionPreference = "Continue"
 
-$AppDisplayName = "Belarus Champ Tools"
+$AppDisplayName = "EzRoKit"
 
 Write-Host ""
 Write-Host "  $AppDisplayName - Uninstall" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Host "Stopping clicker..." -ForegroundColor Cyan
-Stop-Process -Name "Belarus Champ Tools" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "EzRoKit" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "app" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "Belarus Champ Tools" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "clicker" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "viiper" -Force -ErrorAction SilentlyContinue
 Stop-Process -Name "wusbip" -Force -ErrorAction SilentlyContinue
@@ -51,6 +52,12 @@ Write-Host "  Done." -ForegroundColor Green
 Write-Host ""
 Write-Host "Removing shortcuts and app data (if any)..." -ForegroundColor Cyan
 
+$appDataDir = Join-Path $env:LOCALAPPDATA "EzRoKit"
+if (Test-Path $appDataDir) {
+    Remove-Item $appDataDir -Recurse -Force
+    Write-Host "  Removed $appDataDir" -ForegroundColor Green
+}
+# Legacy cleanup: remove app data from the pre-rename "Belarus Champ Tools" installs.
 $legacyDir = Join-Path $env:LOCALAPPDATA "BelarusChampTools"
 if (Test-Path $legacyDir) {
     Remove-Item $legacyDir -Recurse -Force
@@ -102,7 +109,7 @@ foreach ($dir in $shortcutDirs) {
         } catch {
             return
         }
-        if ($target -like "*Belarus Champ Tools.exe" -or $target -like "*\BelarusChampTools\*" -or $target -like "*\USBip\*") {
+        if ($target -like "*EzRoKit.exe" -or $target -like "*\EzRoKit\*" -or $target -like "*Belarus Champ Tools.exe" -or $target -like "*\BelarusChampTools\*" -or $target -like "*\USBip\*") {
             Remove-Item $_.FullName -Force
             Write-Host "  Removed $($_.FullName)" -ForegroundColor Green
         }
@@ -120,7 +127,7 @@ foreach ($startMenuRoot in @(
         } catch {
             return
         }
-        if ($target -like "*Belarus Champ Tools.exe" -or $target -like "*\BelarusChampTools\*" -or $target -like "*\USBip\*") {
+        if ($target -like "*EzRoKit.exe" -or $target -like "*\EzRoKit\*" -or $target -like "*Belarus Champ Tools.exe" -or $target -like "*\BelarusChampTools\*" -or $target -like "*\USBip\*") {
             Remove-Item $_.FullName -Force
             Write-Host "  Removed $($_.FullName)" -ForegroundColor Green
         }
@@ -139,12 +146,12 @@ if (-not $UsbipInstalled) {
 } else {
     Write-Host "  Click Yes on the Windows security prompt." -ForegroundColor Yellow
 
-    $driverScript = Join-Path $env:TEMP "bct-usbip-driver-uninstall.ps1"
-    $driverLog = Join-Path $env:TEMP "bct-usbip-driver-uninstall.log"
+    $driverScript = Join-Path $env:TEMP "ezrokit-usbip-driver-uninstall.ps1"
+    $driverLog = Join-Path $env:TEMP "ezrokit-usbip-driver-uninstall.log"
     Remove-Item $driverLog -Force -ErrorAction SilentlyContinue
 
     $driverBody = @'
-$LogFile = Join-Path $env:TEMP "bct-usbip-driver-uninstall.log"
+$LogFile = Join-Path $env:TEMP "ezrokit-usbip-driver-uninstall.log"
 function Write-Log([string]$Message) {
     Add-Content -Path $LogFile -Value $Message -Encoding UTF8
 }
@@ -251,7 +258,7 @@ Write-Host ""
 Write-Host "Uninstall complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Delete this folder to remove the app:" -ForegroundColor Cyan
-$folder = $env:BCT_INSTALL_DIR.TrimEnd('\')
+$folder = $env:ERK_INSTALL_DIR.TrimEnd('\')
 Write-Host "  $folder" -ForegroundColor Gray
 Write-Host ""
 Write-Host "See README.txt for details." -ForegroundColor Gray

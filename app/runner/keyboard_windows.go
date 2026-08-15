@@ -2,7 +2,7 @@
 
 package runner
 
-import windows "belarus-champ-tools/runner/platform/windows"
+import windows "ezrokit/runner/platform/windows"
 
 func init() {
 	PhysicalKeyDown = windows.WinPhysicalKeyDown

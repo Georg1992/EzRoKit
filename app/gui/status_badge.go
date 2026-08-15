@@ -67,8 +67,15 @@ func (b *toolsBadge) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	}
 	defer brush.Dispose()
 
-	if err := canvas.FillRectanglePixels(brush, bounds); err != nil {
+	// Rounded corners + a slightly darker border for a softer, badge-like look.
+	radius := walk.Size{Width: 8, Height: 8}
+	if err := canvas.FillRoundedRectanglePixels(brush, bounds, radius); err != nil {
 		return err
+	}
+	borderColor := darkenColor(color, 40)
+	if pen, err := walk.NewCosmeticPen(walk.PenSolid, borderColor); err == nil {
+		_ = canvas.DrawRoundedRectanglePixels(pen, bounds, radius)
+		pen.Dispose()
 	}
 
 	return canvas.DrawTextPixels(
@@ -78,6 +85,22 @@ func (b *toolsBadge) paint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		bounds,
 		walk.TextCenter|walk.TextVCenter,
 	)
+}
+
+// darkenColor returns a darker shade of c by subtracting d from each channel.
+func darkenColor(c walk.Color, d byte) walk.Color {
+	return walk.RGB(
+		maxByte(0, int(c.R())-int(d)),
+		maxByte(0, int(c.G())-int(d)),
+		maxByte(0, int(c.B())-int(d)),
+	)
+}
+
+func maxByte(a, b int) byte {
+	if a > b {
+		return byte(a)
+	}
+	return byte(b)
 }
 
 func (b *toolsBadge) SetStatus(status toolsStatus) {

@@ -1,4 +1,4 @@
-module belarus-champ-tools
+module ezrokit
 
 go 1.26.2
 

@@ -27,13 +27,6 @@ func (s *orderedClickerSession) MouseClick(hold time.Duration) error {
 	s.mu.Unlock()
 	return nil
 }
-func (s *orderedClickerSession) ClickerCycle(_ int32, keyHold, mouseHold time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.events = append(s.events, "key", "mouse")
-	s.holds = append(s.holds, keyHold, mouseHold)
-	return nil
-}
 func (s *orderedClickerSession) snapshot() ([]string, []time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

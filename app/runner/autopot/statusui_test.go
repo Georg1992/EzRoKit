@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"belarus-champ-tools/runner/autopot/statusui"
+	"ezrokit/runner/autopot/statusui"
 )
 
 // TestStatusUIReaderCancel verifies that ReadValues returns an error

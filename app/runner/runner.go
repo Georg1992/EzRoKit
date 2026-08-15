@@ -14,8 +14,8 @@
 package runner
 
 import (
-	"belarus-champ-tools/runner/autopot"
-	"belarus-champ-tools/runner/internal/session"
+	"ezrokit/runner/autopot"
+	"ezrokit/runner/internal/session"
 )
 
 // InputSession is the canonical input-device interface any runner uses.

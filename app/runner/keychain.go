@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"belarus-champ-tools/runner/internal/lifecycle"
-	"belarus-champ-tools/runner/internal/session"
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/lifecycle"
+	"ezrokit/runner/internal/session"
+	"ezrokit/runner/internal/timing"
 )
 
 const (

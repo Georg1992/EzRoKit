@@ -8,7 +8,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 )
 
 // onStartViiper starts the VIIPER server and opens an input session. Called

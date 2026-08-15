@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"belarus-champ-tools/runner/internal/session"
+	"ezrokit/runner/internal/session"
 )
 
 // mockSession is a session.InputSession for the autopot stress test.

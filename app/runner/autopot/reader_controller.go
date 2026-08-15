@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 )
 
 const (

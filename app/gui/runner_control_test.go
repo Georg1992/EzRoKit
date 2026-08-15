@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 )
 
 // fakeRunner is a minimal lifecycleRunner for unit tests. It records

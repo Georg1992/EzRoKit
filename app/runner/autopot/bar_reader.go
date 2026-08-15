@@ -6,7 +6,7 @@ import (
 	"image"
 	"time"
 
-	"belarus-champ-tools/runner/autopot/statusui"
+	"ezrokit/runner/autopot/statusui"
 )
 
 // BarReadStatus distinguishes the semantic state of a BarReadResult.

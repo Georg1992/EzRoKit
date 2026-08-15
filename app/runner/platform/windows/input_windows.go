@@ -31,7 +31,7 @@ func PhysicalKeyDown(vk int32) bool {
 // PhysicalKeyDown / PollKeyToggle function variables. They are exported
 // because keyboard_windows.go imports this package under an alias.
 var (
-	WinPhysicalKeyDown = PhysicalKeyDown
-	WinPollKeyToggle   = PollKeyToggle
+	WinPhysicalKeyDown      = PhysicalKeyDown
+	WinPollKeyToggle        = PollKeyToggle
 )
 

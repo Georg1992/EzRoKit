@@ -1,5 +1,5 @@
-BELARUS CHAMP TOOLS
-=====================
+# EZROKIT
+
 
 Install
 -------
@@ -12,7 +12,7 @@ Extract this ZIP, then:
 2. Restart your PC if the installer asks you to
    (only needed the first time)
 
-3. Double-click Belarus Champ Tools.exe in this folder
+3. Double-click EzRoKit.exe in this folder
    Click Start, configure your tools, then open your game.
    Press End or F12 to toggle start/stop.
 

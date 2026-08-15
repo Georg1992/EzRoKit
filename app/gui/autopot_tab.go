@@ -8,8 +8,8 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"belarus-champ-tools/runner"
-	"belarus-champ-tools/runner/profiles"
+	"ezrokit/runner"
+	"ezrokit/runner/profiles"
 	"github.com/lxn/walk"
 )
 
@@ -54,6 +54,19 @@ func (c *autopotController) selectedProfile() profiles.Profile {
 		return all[idx]
 	}
 	return profiles.Default()
+}
+
+func (c *autopotController) selectProfileByName(name string) {
+	all := profiles.All()
+	for i, profile := range all {
+		if profile.Name == name {
+			c.profileCB.SetCurrentIndex(i)
+			return
+		}
+	}
+	if len(all) > 0 {
+		c.profileCB.SetCurrentIndex(0)
+	}
 }
 
 func (c *autopotController) selectedWindowTitle() string {
@@ -136,18 +149,9 @@ func (a *guiApp) buildAutoPotTab(page *walk.TabPage) error {
 		return err
 	}
 
-	hintFont, err := walk.NewFont("Segoe UI", 8, 0)
-	if err != nil {
+	if _, err := newHint(page, "When HP or SP drops below the threshold, one potion is pressed at a time; the bar is polled until it recovers before using another."); err != nil {
 		return err
 	}
-	hint, err := walk.NewLabel(page)
-	if err != nil {
-		return err
-	}
-	if err := hint.SetText("When HP or SP drops below the threshold, one potion is pressed at a time; the bar is polled until it recovers before using another."); err != nil {
-		return err
-	}
-	hint.SetFont(hintFont)
 
 	// Initial state: address controls disabled (default is Visual mode).
 	a.setAutoPotAddressModeEnabled(false)
@@ -229,11 +233,7 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 		return err
 	}
 
-	winLabel, err := walk.NewLabel(addrRow)
-	if err != nil {
-		return err
-	}
-	if err := winLabel.SetText("Game window:"); err != nil {
+	if _, err := newFieldLabel(addrRow, "Game window:", 80); err != nil {
 		return err
 	}
 
@@ -253,11 +253,7 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 		return err
 	}
 
-	profileLabel, err := walk.NewLabel(addrRow)
-	if err != nil {
-		return err
-	}
-	if err := profileLabel.SetText("Profile:"); err != nil {
+	if _, err := newFieldLabel(addrRow, "Profile:", 50); err != nil {
 		return err
 	}
 
@@ -282,7 +278,7 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 
 	// Wire window selection.
 	a.autopot.windowCB.CurrentIndexChanged().Attach(func() {
-		if a.autopot.isRefreshingWindows {
+		if a.autopot.isRefreshingWindows || a.profileApplying {
 			return
 		}
 		if a.autopot.windowCB.CurrentIndex() < 0 {
@@ -341,7 +337,7 @@ func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig)
 		return err
 	}
 	layout := walk.NewHBoxLayout()
-	layout.SetSpacing(10)
+	layout.SetSpacing(8)
 	if err := gb.SetLayout(layout); err != nil {
 		return err
 	}
@@ -356,11 +352,7 @@ func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig)
 	(*cfg.enabledCB).SetChecked(true)
 	(*cfg.enabledCB).CheckedChanged().Attach(a.syncAutoPotSettings)
 
-	threshLabel, err := walk.NewLabel(gb)
-	if err != nil {
-		return err
-	}
-	if err := threshLabel.SetText("Trigger below %:"); err != nil {
+	if _, err := newFieldLabel(gb, "Trigger below %:", 100); err != nil {
 		return err
 	}
 
@@ -382,11 +374,7 @@ func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig)
 		a.syncAutoPotSettings()
 	})
 
-	keyLabel, err := walk.NewLabel(gb)
-	if err != nil {
-		return err
-	}
-	if err := keyLabel.SetText("Key:"); err != nil {
+	if _, err := newFieldLabel(gb, "Key:", 30); err != nil {
 		return err
 	}
 
@@ -397,21 +385,19 @@ func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig)
 	if err := (*cfg.keyLabel).SetText("none"); err != nil {
 		return err
 	}
-
-	*cfg.bindBtn, err = walk.NewPushButton(gb)
-	if err != nil {
+	// Stable width so the buttons stay aligned.
+	if err := (*cfg.keyLabel).SetMinMaxSize(walk.Size{Width: 70, Height: 0}, walk.Size{Width: 9999, Height: 0}); err != nil {
 		return err
 	}
-	if err := (*cfg.bindBtn).SetText("Set key..."); err != nil {
+
+	*cfg.bindBtn, err = newFixedButton(gb, "Set key...", 85)
+	if err != nil {
 		return err
 	}
 	(*cfg.bindBtn).Clicked().Attach(cfg.onBind)
 
-	*cfg.clearBtn, err = walk.NewPushButton(gb)
+	*cfg.clearBtn, err = newFixedButton(gb, "Clear", 55)
 	if err != nil {
-		return err
-	}
-	if err := (*cfg.clearBtn).SetText("Clear"); err != nil {
 		return err
 	}
 	(*cfg.clearBtn).Clicked().Attach(cfg.onClear)
@@ -520,6 +506,9 @@ func (a *guiApp) commitSPThresholdEdit() {
 }
 
 func (a *guiApp) syncAutoPotSettings() {
+	if a.profileApplying {
+		return
+	}
 	cfg := a.autopot.wanted(a.autopotModeFn(), a.autopotStatusFn(), a.guiLog(a.appendLog))
 	a.mu.Lock()
 	cfg.Core.Session = a.inputSession

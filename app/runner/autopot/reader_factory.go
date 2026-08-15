@@ -1,7 +1,7 @@
 package autopot
 
 import (
-	"belarus-champ-tools/runner/autopot/statusui"
+	"ezrokit/runner/autopot/statusui"
 )
 
 // ReaderFactory constructs BarReader instances based on the provided config.

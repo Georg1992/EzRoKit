@@ -5,7 +5,7 @@ package main
 import (
 	"testing"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 )
 
 type mockAutoPotRunner struct {

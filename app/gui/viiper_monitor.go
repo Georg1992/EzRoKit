@@ -9,7 +9,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 
 	"github.com/Alia5/VIIPER/viiperclient"
 )

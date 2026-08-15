@@ -8,7 +8,7 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 	"github.com/lxn/walk"
 )
 
@@ -115,11 +115,7 @@ func (a *guiApp) buildTimerKeySection(page *walk.TabPage) error {
 	}
 	a.timer.addBtn.Clicked().Attach(a.onAddTimer)
 
-	timerHint, err := walk.NewLabel(timerGB)
-	if err != nil {
-		return err
-	}
-	if err := timerHint.SetText("Each enabled timer presses its key once every interval. Keyboard only — separate from the clicker above."); err != nil {
+	if _, err := newHint(timerGB, "Each enabled timer presses its key once every interval. Keyboard only — separate from the clicker above."); err != nil {
 		return err
 	}
 
@@ -132,7 +128,7 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 		return err
 	}
 	rowLayout := walk.NewHBoxLayout()
-	rowLayout.SetSpacing(10)
+	rowLayout.SetSpacing(8)
 	if err := row.SetLayout(rowLayout); err != nil {
 		return err
 	}
@@ -140,11 +136,7 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 	w := &a.timer.slots[index]
 	w.row = row
 
-	slotLabel, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := slotLabel.SetText(fmt.Sprintf("Timer %d:", index+1)); err != nil {
+	if _, err := newFieldLabel(row, fmt.Sprintf("Timer %d:", index+1), 55); err != nil {
 		return err
 	}
 
@@ -154,11 +146,7 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 	}
 	w.enabledCB.CheckedChanged().Attach(a.syncTimerKeySettings)
 
-	keyText, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := keyText.SetText("Key:"); err != nil {
+	if _, err := newFieldLabel(row, "Key:", 30); err != nil {
 		return err
 	}
 
@@ -169,12 +157,13 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 	if err := w.keyLabel.SetText("none"); err != nil {
 		return err
 	}
-
-	w.bindBtn, err = walk.NewPushButton(row)
-	if err != nil {
+	// Stable width so the Interval column stays aligned.
+	if err := w.keyLabel.SetMinMaxSize(walk.Size{Width: 80, Height: 0}, walk.Size{Width: 9999, Height: 0}); err != nil {
 		return err
 	}
-	if err := w.bindBtn.SetText("Set key..."); err != nil {
+
+	w.bindBtn, err = newFixedButton(row, "Set key...", 85)
+	if err != nil {
 		return err
 	}
 	slot := index
@@ -182,22 +171,15 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 		a.bindTimerKey(slot)
 	})
 
-	w.clearBtn, err = walk.NewPushButton(row)
+	w.clearBtn, err = newFixedButton(row, "Clear", 55)
 	if err != nil {
-		return err
-	}
-	if err := w.clearBtn.SetText("Clear"); err != nil {
 		return err
 	}
 	w.clearBtn.Clicked().Attach(func() {
 		a.clearTimerKey(slot)
 	})
 
-	intervalLabel, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := intervalLabel.SetText("Interval (s):"); err != nil {
+	if _, err := newFieldLabel(row, "Interval (s):", 80); err != nil {
 		return err
 	}
 
@@ -206,7 +188,7 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 		return err
 	}
 	w.intervalEdit.SetMaxLength(6)
-	if err := w.intervalEdit.SetMinMaxSize(walk.Size{Width: 80, Height: 0}, walk.Size{Width: 80, Height: 0}); err != nil {
+	if err := w.intervalEdit.SetMinMaxSize(walk.Size{Width: 60, Height: 0}, walk.Size{Width: 60, Height: 0}); err != nil {
 		return err
 	}
 	if err := w.intervalEdit.SetText(strconv.Itoa(runner.DefaultTimerKeyIntervalSec)); err != nil {
@@ -235,6 +217,9 @@ func (a *guiApp) updateTimerAddButton() {
 }
 
 func (a *guiApp) syncTimerKeySettings() {
+	if a.profileApplying {
+		return
+	}
 	cfg := a.timer.wanted(a.appendLog)
 	a.mu.Lock()
 	t := a.timerKeyRunner

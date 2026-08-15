@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 
 	"github.com/Alia5/VIIPER/device/keyboard"
 )

@@ -15,7 +15,7 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 )
 
 // lifecycleRunner is the minimum surface needed to drive a backed

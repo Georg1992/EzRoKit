@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"belarus-champ-tools/runner/internal/session"
+	"ezrokit/runner/internal/session"
 )
 
 // mockSession is a session.InputSession that counts TapKey calls.
@@ -23,7 +23,7 @@ func (m *mockSession) TapKey(vk int32, hold time.Duration) error {
 }
 
 func (m *mockSession) MouseClick(_ time.Duration) error { return nil }
-func (m *mockSession) TapCount() int64  { return m.tapCount.Load() }
+func (m *mockSession) TapCount() int64                  { return m.tapCount.Load() }
 
 // TestTimerKeyRunnerStress starts a real TimerKeyRunner (whose run() loop
 // calls session.TapKey on each enabled slot's interval), then hammers
@@ -200,14 +200,14 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 
 	ap := NewAutoPot(AutoPotConfig{
 		Core: CoreConfig{
-		Session:     sess,
-		HPThreshold: 50,
-		SPThreshold: 50,
-		HPKeyVK:     'Q',
-		SPKeyVK:     'W',
-		HPEnabled:   true,
-		SPEnabled:   true,
-		Log:         func(string) {},
+			Session:     sess,
+			HPThreshold: 50,
+			SPThreshold: 50,
+			HPKeyVK:     'Q',
+			SPKeyVK:     'W',
+			HPEnabled:   true,
+			SPEnabled:   true,
+			Log:         func(string) {},
 		},
 	})
 	if err := ap.Start(); err != nil {
@@ -234,14 +234,14 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 					})
 					ap.UpdateSettings(AutoPotConfig{
 						Core: CoreConfig{
-						Session:     sess,
-						HPThreshold: 40 + n%40,
-						SPThreshold: 40 + n%40,
-						HPKeyVK:     'Q',
-						SPKeyVK:     'W',
-						HPEnabled:   n%2 == 0,
-						SPEnabled:   true,
-						Log:         func(string) {},
+							Session:     sess,
+							HPThreshold: 40 + n%40,
+							SPThreshold: 40 + n%40,
+							HPKeyVK:     'Q',
+							SPKeyVK:     'W',
+							HPEnabled:   n%2 == 0,
+							SPEnabled:   true,
+							Log:         func(string) {},
 						},
 					})
 					n++
@@ -269,7 +269,7 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 
 	// Direct TapKey callers — simulates concurrent key taps from
 	// multiple runners on the same session (the real ViiperSession
-	// serialises via writeMu, but the mock exercises the pattern).
+	// serialises writes per device, but the mock exercises the pattern).
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {

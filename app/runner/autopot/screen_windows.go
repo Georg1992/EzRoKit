@@ -5,7 +5,7 @@ package autopot
 import (
 	"image"
 
-	windows "belarus-champ-tools/runner/platform/windows"
+	windows "ezrokit/runner/platform/windows"
 )
 
 func init() {

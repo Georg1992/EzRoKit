@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 	"github.com/lxn/walk"
 )
 
@@ -156,11 +156,7 @@ func (a *guiApp) buildClickerTab(page *walk.TabPage) error {
 	a.updateClickerAddButton()
 	a.updateClickerRemoveButtons()
 
-	configHint, err := walk.NewLabel(configGB)
-	if err != nil {
-		return err
-	}
-	if err := configHint.SetText("Up to 2 binds. Enable Mouse for key → mouse → sleep, or disable it for key-only spamming. First held key has priority; End or F12 toggles start/stop."); err != nil {
+	if _, err := newHint(configGB, "Up to 2 binds. Enable Mouse for key → mouse → sleep, or disable it for key-only spamming. Held binds run independently; End or F12 toggles start/stop."); err != nil {
 		return err
 	}
 
@@ -173,13 +169,19 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 		return err
 	}
 	rowLayout := walk.NewHBoxLayout()
-	rowLayout.SetSpacing(10)
+	rowLayout.SetSpacing(8)
 	if err := row.SetLayout(rowLayout); err != nil {
 		return err
 	}
 
 	w := &a.clicker.slots[index]
 	w.row = row
+
+	title, err := newFieldLabel(row, clickerTitle(index)+":", 55)
+	if err != nil {
+		return err
+	}
+	_ = title
 
 	w.mouseCB, err = walk.NewCheckBox(row)
 	if err != nil {
@@ -191,19 +193,7 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 	w.mouseCB.SetChecked(index == 0)
 	w.mouseCB.CheckedChanged().Attach(a.syncRunnerSettings)
 
-	title, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := title.SetText(clickerTitle(index) + ":"); err != nil {
-		return err
-	}
-
-	keyText, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := keyText.SetText("Keys:"); err != nil {
+	if _, err := newFieldLabel(row, "Keys:", 35); err != nil {
 		return err
 	}
 
@@ -214,12 +204,13 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 	if err := w.keyLabel.SetText(runner.KeysText(a.clicker.triggerVKs[index])); err != nil {
 		return err
 	}
-
-	w.bindBtn, err = walk.NewPushButton(row)
-	if err != nil {
+	// Stable width so the Delay column stays aligned as keys change.
+	if err := w.keyLabel.SetMinMaxSize(walk.Size{Width: 120, Height: 0}, walk.Size{Width: 9999, Height: 0}); err != nil {
 		return err
 	}
-	if err := w.bindBtn.SetText("Add key..."); err != nil {
+
+	w.bindBtn, err = newFixedButton(row, "Add key...", 85)
+	if err != nil {
 		return err
 	}
 	slot := index
@@ -227,33 +218,15 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 		a.bindClickerKey(slot)
 	})
 
-	w.clearBtn, err = walk.NewPushButton(row)
+	w.clearBtn, err = newFixedButton(row, "Clear", 55)
 	if err != nil {
-		return err
-	}
-	if err := w.clearBtn.SetText("Clear"); err != nil {
 		return err
 	}
 	w.clearBtn.Clicked().Attach(func() {
 		a.clearClickerKey(slot)
 	})
 
-	w.removeBtn, err = walk.NewPushButton(row)
-	if err != nil {
-		return err
-	}
-	if err := w.removeBtn.SetText("Remove"); err != nil {
-		return err
-	}
-	w.removeBtn.Clicked().Attach(func() {
-		a.removeClicker(slot)
-	})
-
-	delayLabel, err := walk.NewLabel(row)
-	if err != nil {
-		return err
-	}
-	if err := delayLabel.SetText("Delay (ms):"); err != nil {
+	if _, err := newFieldLabel(row, "Delay (ms):", 70); err != nil {
 		return err
 	}
 
@@ -262,7 +235,7 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 		return err
 	}
 	w.delayEdit.SetMaxLength(6)
-	if err := w.delayEdit.SetMinMaxSize(walk.Size{Width: 80, Height: 0}, walk.Size{Width: 80, Height: 0}); err != nil {
+	if err := w.delayEdit.SetMinMaxSize(walk.Size{Width: 60, Height: 0}, walk.Size{Width: 60, Height: 0}); err != nil {
 		return err
 	}
 	if err := w.delayEdit.SetText(strconv.Itoa(runner.DefaultDelayMs)); err != nil {
@@ -272,6 +245,15 @@ func (a *guiApp) buildClickerSlot(parent walk.Container, index int) error {
 	w.delayEdit.TextChanged().Attach(a.syncRunnerSettings)
 	w.delayEdit.EditingFinished().Attach(func() {
 		a.logClickerDelayIfChanged(slot)
+	})
+
+	// Remove sits at the row end so hiding it doesn't shift the Delay column.
+	w.removeBtn, err = newFixedButton(row, "Remove", 70)
+	if err != nil {
+		return err
+	}
+	w.removeBtn.Clicked().Attach(func() {
+		a.removeClicker(slot)
 	})
 
 	return nil

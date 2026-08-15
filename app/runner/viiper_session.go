@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 
 	"github.com/Alia5/VIIPER/viiperclient"
 )
@@ -17,7 +17,10 @@ type ViiperSession struct {
 	busID      uint32
 	createdBus bool
 
-	writeMu     sync.Mutex
+	// Keyboard and mouse writes use separate locks so a clicker's mouse
+	// cycle does not block unrelated keyboard input.
+	keyMu       sync.Mutex
+	mouseMu     sync.Mutex
 	keyStream   *viiperclient.DeviceStream
 	mouseStream *viiperclient.DeviceStream
 
@@ -93,10 +96,12 @@ func (s *ViiperSession) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), timing.SessionCloseWait)
 		defer cancel()
 
-		s.writeMu.Lock()
+		s.keyMu.Lock()
 		_ = keyUpLocked(s.keyStream)
+		s.keyMu.Unlock()
+		s.mouseMu.Lock()
 		_ = mouseUpLocked(s.mouseStream)
-		s.writeMu.Unlock()
+		s.mouseMu.Unlock()
 
 		_ = s.keyStream.Close()
 		_ = s.mouseStream.Close()

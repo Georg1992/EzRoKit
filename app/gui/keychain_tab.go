@@ -7,7 +7,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 	"github.com/lxn/walk"
 )
 
@@ -107,11 +107,7 @@ func (a *guiApp) buildKeyChainTab(page *walk.TabPage) error {
 	a.updateKeyChainAddButton()
 	a.updateKeyChainRemoveButtons()
 
-	hint, err := walk.NewLabel(page)
-	if err != nil {
-		return err
-	}
-	if err := hint.SetText("Key 1 is the trigger for each switch. Tap it to run the chain once; hold it to loop."); err != nil {
+	if _, err := newHint(page, "Key 1 is the trigger for each switch. Tap it to run the chain once; hold it to loop."); err != nil {
 		return err
 	}
 	return nil
@@ -374,6 +370,9 @@ func (a *guiApp) updateKeyChainRemoveButtons() {
 }
 
 func (a *guiApp) syncKeyChainSettings() {
+	if a.profileApplying {
+		return
+	}
 	if !a.isStarted() {
 		return
 	}

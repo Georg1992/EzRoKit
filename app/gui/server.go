@@ -18,7 +18,7 @@ import (
 
 	_ "embed"
 
-	"belarus-champ-tools/runner"
+	"ezrokit/runner"
 
 	"github.com/Alia5/VIIPER/viiperclient"
 	"golang.org/x/sys/windows"

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"belarus-champ-tools/runner/internal/timing"
+	"ezrokit/runner/internal/timing"
 )
 
 type clickerEvent struct {
@@ -34,19 +34,6 @@ func (s *clickerTestSession) MouseClick(_ time.Duration) error {
 	s.mu.Lock()
 	s.events = append(s.events, clickerEvent{kind: "mouse", at: time.Now()})
 	s.mu.Unlock()
-	return nil
-}
-func (s *clickerTestSession) ClickerCycle(vk int32, _, _ time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.failKeys {
-		return fmt.Errorf("key failed")
-	}
-	now := time.Now()
-	s.events = append(s.events,
-		clickerEvent{kind: "key", vk: vk, at: now},
-		clickerEvent{kind: "mouse", at: now},
-	)
 	return nil
 }
 func (s *clickerTestSession) snapshot() []clickerEvent {
@@ -105,7 +92,7 @@ func TestClicker_AlwaysEmitsKeyThenMouse(t *testing.T) {
 	}
 }
 
-func TestClicker_FirstPressedKeyHasPriorityAndHandsOff(t *testing.T) {
+func TestClicker_HeldKeysRunIndependently(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 
@@ -121,8 +108,6 @@ func TestClicker_FirstPressedKeyHasPriorityAndHandsOff(t *testing.T) {
 	r := New(Config{
 		Session: sess,
 		Slots: [ClickerSlotCount]ClickerSlot{
-			// The long owner delay makes it obvious that T is waiting for
-			// ownership rather than being independently fired.
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1000, MouseClick: false},
 			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: false},
 		},
@@ -138,26 +123,30 @@ func TestClicker_FirstPressedKeyHasPriorityAndHandsOff(t *testing.T) {
 
 	mu.Lock()
 	held['D'] = true
-	mu.Unlock()
-	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
-
-	mu.Lock()
 	held['T'] = true
 	mu.Unlock()
-	time.Sleep(40 * time.Millisecond)
-	for _, event := range sess.snapshot() {
-		if event.kind == "key" && event.vk == 'T' {
-			t.Fatalf("T fired while first-pressed D was still held: %v", sess.snapshot())
-		}
-	}
 
-	mu.Lock()
-	held['D'] = false
-	mu.Unlock()
+	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
 	waitForKeyEvent(t, sess, 'T', 200*time.Millisecond)
+
+	// T must be allowed through without waiting for D to be released.
+	time.Sleep(40 * time.Millisecond)
+	if events := sess.snapshot(); countKeyEvents(events, 'T') == 0 {
+		t.Fatalf("T did not run while D was still held: %v", events)
+	}
 }
 
-func TestClicker_PriorityKeepsMousePairsIntact(t *testing.T) {
+func countKeyEvents(events []clickerEvent, vk int32) int {
+	n := 0
+	for _, event := range events {
+		if event.kind == "key" && event.vk == vk {
+			n++
+		}
+	}
+	return n
+}
+
+func TestClicker_IndependentMousePairsStayIntact(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 
@@ -191,16 +180,6 @@ func TestClicker_PriorityKeepsMousePairsIntact(t *testing.T) {
 	held['T'] = true
 	mu.Unlock()
 	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
-	time.Sleep(40 * time.Millisecond)
-	for _, event := range sess.snapshot() {
-		if event.kind == "key" && event.vk == 'T' {
-			t.Fatalf("T interrupted D ownership: %v", sess.snapshot())
-		}
-	}
-
-	mu.Lock()
-	held['D'] = false
-	mu.Unlock()
 	waitForKeyEvent(t, sess, 'T', 200*time.Millisecond)
 
 	events := sess.snapshot()
@@ -223,6 +202,46 @@ func waitForKeyEvent(t *testing.T, sess *clickerTestSession, vk int32, timeout t
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for key %d: %v", vk, sess.snapshot())
+}
+
+func TestClicker_ReleasedTriggerStopsAfterGrace(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+
+	var mu sync.Mutex
+	held := true
+	PhysicalKeyDown = func(vk int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return vk == 'D' && held
+	}
+
+	sess := &clickerTestSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		r.Stop()
+		r.Wait()
+	}()
+
+	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
+	mu.Lock()
+	held = false
+	mu.Unlock()
+	time.Sleep(ClickerReleaseGrace + 40*time.Millisecond)
+	stoppedAt := countKeyEvents(sess.snapshot(), 'D')
+	time.Sleep(50 * time.Millisecond)
+	if got := countKeyEvents(sess.snapshot(), 'D'); got != stoppedAt {
+		t.Fatalf("released trigger kept cycling: %d then %d events", stoppedAt, got)
+	}
 }
 
 func TestClicker_FailedKeyDoesNotEmitMouse(t *testing.T) {
