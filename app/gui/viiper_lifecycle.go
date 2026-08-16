@@ -5,8 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime/debug"
 
 	"ezrokit/runner"
 )
@@ -27,11 +25,6 @@ func (a *guiApp) onStartViiper() {
 			a.mu.Lock()
 			a.viiperStartupCancel = nil
 			a.mu.Unlock()
-		}()
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in onStartViiper: %v\n%s\n", r, debug.Stack())
-			}
 		}()
 		logFn := func(s string) {
 			if ctx.Err() != nil {

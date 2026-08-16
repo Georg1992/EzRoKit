@@ -17,10 +17,11 @@ import (
 // running goroutine. Generic over C so each runner keeps Config as its own
 // type without us reaching into fields.
 type Lifecycle[C any] struct {
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	done    chan struct{}
-	running bool
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	done       chan struct{}
+	running    bool
+	generation uint64
 
 	liveMu sync.RWMutex
 	live   C
@@ -82,35 +83,38 @@ func (l *Lifecycle[C]) Start(run func(context.Context, C)) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	l.generation++
+	generation := l.generation
 	l.cancel = cancel
 	l.running = true
-	l.done = make(chan struct{})
+	l.done = done
 	onStop := l.onStop
 	l.mu.Unlock()
 
 	go func() {
+		// Keep all completion bookkeeping tied to this run's generation.
+		// A new Start is allowed as soon as the old run is marked stopped;
+		// an old panic handler must never clear the new run's state.
 		defer func() {
 			if r := recover(); r != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "PANIC in runner: %v\n%s\n", r, debug.Stack())
-				// Mark as not running so the app doesn't hang on Wait().
-				// Normal defers (close(l.done), onStop) already ran before this.
-				l.mu.Lock()
+			}
+			if onStop != nil {
+				// Cleanup is best-effort and must not strand the lifecycle if
+				// a caller's cleanup callback panics.
+				func() {
+					defer func() { _ = recover() }()
+					onStop(cfg)
+				}()
+			}
+			l.mu.Lock()
+			if l.generation == generation {
 				l.running = false
 				l.cancel = nil
-				l.mu.Unlock()
 			}
-		}()
-		defer close(l.done)
-		defer func() {
-			l.mu.Lock()
-			l.running = false
-			l.cancel = nil
 			l.mu.Unlock()
-		}()
-		defer func() {
-			if onStop != nil {
-				onStop(cfg)
-			}
+			close(done)
 		}()
 		run(ctx, cfg)
 	}()

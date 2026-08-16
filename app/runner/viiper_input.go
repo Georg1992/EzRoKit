@@ -14,6 +14,11 @@ import (
 // Reset releases all keys and mouse buttons without closing streams, removing
 // devices, or removing the bus. The session stays reusable after a Stop.
 func (s *ViiperSession) Reset() {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	if s.closed {
+		return
+	}
 	s.keyMu.Lock()
 	_ = keyUpLocked(s.keyStream)
 	s.keyMu.Unlock()
@@ -23,6 +28,15 @@ func (s *ViiperSession) Reset() {
 }
 
 func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
+	// Keep the read lock until the device lock is acquired. Close takes
+	// the write lock first, then waits for the in-flight device operation;
+	// this prevents a pre-close caller from starting a write after Close
+	// has already closed the stream.
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	if s.closed {
+		return errViiperSessionClosed
+	}
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
 	if err := keyDownLocked(s.keyStream, vk); err != nil {
@@ -33,6 +47,11 @@ func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
 }
 
 func (s *ViiperSession) MouseClick(hold time.Duration) error {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	if s.closed {
+		return errViiperSessionClosed
+	}
 	s.mouseMu.Lock()
 	defer s.mouseMu.Unlock()
 	return mouseClickLocked(s.mouseStream, hold)

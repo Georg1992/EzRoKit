@@ -158,7 +158,7 @@ func ensureViiperServer(ctx context.Context, log func(string)) (started bool, er
 		serverMu.Unlock()
 		killProcessTree(pid)
 		_, _ = cmd.Process.Wait() // populate cmd.ProcessState for diagnostics
-		dumpViiperDiagnostics(cmd, ring, addr, log)
+		dumpViiperDiagnostics(cmd, ring, addr, dir, log)
 		_ = os.RemoveAll(dir)
 		return false, err
 	}
@@ -254,7 +254,18 @@ func waitForServer(ctx context.Context, addr string, timeout time.Duration, log 
 			log(fmt.Sprintf("ping attempt %d: %v", attempt, err))
 		}
 
-		time.Sleep(serverPollPeriod)
+		timer := time.NewTimer(serverPollPeriod)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return fmt.Errorf("server ping timed out after %s (%d attempts)", timeout, attempt)
 }
@@ -263,7 +274,7 @@ func waitForServer(ctx context.Context, addr string, timeout time.Duration, log 
 // timeout diagnostics
 // ---------------------------------------------------------------------------
 
-func dumpViiperDiagnostics(cmd *exec.Cmd, ring *outputRing, addr string, log func(string)) {
+func dumpViiperDiagnostics(cmd *exec.Cmd, ring *outputRing, addr, tempDir string, log func(string)) {
 	log("--- VIIPER startup diagnostics ---")
 
 	// 1. Process status.
@@ -302,12 +313,12 @@ func dumpViiperDiagnostics(cmd *exec.Cmd, ring *outputRing, addr string, log fun
 	if len(lines) == 0 {
 		suggestions = append(suggestions, "No output captured — viiper.exe may have failed to start (missing DLL, permissions, or antivirus block)")
 	}
-	suggestions = append(suggestions, "Run '"+filepath.Join(viiperTempDir, "viiper.exe")+" server' in a terminal to see startup output directly")
-			if idx := strings.LastIndex(addr, ":"); idx >= 0 {
-			suggestions = append(suggestions, "Check Windows Firewall — port "+addr[idx+1:]+" must be allowed for localhost TCP")
-		} else {
-			suggestions = append(suggestions, "Check Windows Firewall — port must be allowed for localhost TCP")
-		}
+	suggestions = append(suggestions, "Run '"+filepath.Join(tempDir, "viiper.exe")+" server' in a terminal to see startup output directly")
+	if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+		suggestions = append(suggestions, "Check Windows Firewall — port "+addr[idx+1:]+" must be allowed for localhost TCP")
+	} else {
+		suggestions = append(suggestions, "Check Windows Firewall — port must be allowed for localhost TCP")
+	}
 	suggestions = append(suggestions, "If port is wrong, update DefaultAPIAddr in runner/internal/timing/timing.go")
 
 	log("Suggested actions:")
@@ -357,8 +368,6 @@ func killProcessTree(pid int) {
 	// Best-effort kill; process may have already exited or be unkillable
 	_ = exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 }
-
-
 
 // ---------------------------------------------------------------------------
 // helpers

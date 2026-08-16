@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -19,6 +20,9 @@ type ViiperSession struct {
 
 	// Keyboard and mouse writes use separate locks so a clicker's mouse
 	// cycle does not block unrelated keyboard input.
+	stateMu sync.RWMutex
+	closed  bool
+
 	keyMu       sync.Mutex
 	mouseMu     sync.Mutex
 	keyStream   *viiperclient.DeviceStream
@@ -91,8 +95,18 @@ func OpenViiperSession(ctx context.Context, apiAddr string, log func(string)) (*
 	}, nil
 }
 
+var errViiperSessionClosed = errors.New("viiper session is closed")
+
 func (s *ViiperSession) Close() {
 	s.closeOnce.Do(func() {
+		// Hold the closed state before taking either device lock. Input
+		// methods hold the read lock while acquiring their device lock,
+		// so no new write can slip between this transition and stream
+		// closure, even when Close races with a queued TapKey/MouseClick.
+		s.stateMu.Lock()
+		s.closed = true
+		s.stateMu.Unlock()
+
 		ctx, cancel := context.WithTimeout(context.Background(), timing.SessionCloseWait)
 		defer cancel()
 

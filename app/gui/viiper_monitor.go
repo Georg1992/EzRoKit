@@ -4,9 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"runtime/debug"
 	"time"
 
 	"ezrokit/runner"
@@ -32,11 +29,6 @@ func startViiperMonitor(ctx context.Context, onStatusChange func(active bool)) *
 	}
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in viiperMonitor: %v\n%s\n", r, debug.Stack())
-			}
-		}()
 		defer close(m.done)
 		addr := runner.DefaultAPIAddr
 		api := viiperclient.New(addr)

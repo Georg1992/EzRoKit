@@ -3,8 +3,6 @@ package runner
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime/debug"
 	"time"
 
 	"ezrokit/runner/internal/timing"
@@ -144,11 +142,6 @@ func WaitForKeyPressContext(ctx context.Context, timeout time.Duration) (int32, 
 // caller must marshal to the GUI thread if needed. Stop by cancelling ctx.
 func StartToggleKeyWatcher(ctx context.Context, onToggle func(vk int32)) {
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in StartToggleKeyWatcher: %v\n%s\n", r, debug.Stack())
-			}
-		}()
 		down := make([]bool, len(timing.ToggleVKs))
 		for ctx.Err() == nil {
 			for i, vk := range timing.ToggleVKs {

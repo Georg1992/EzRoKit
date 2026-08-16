@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"runtime/debug"
 
 	"ezrokit/runner"
 	"github.com/lxn/walk"
@@ -419,9 +417,29 @@ func (a *guiApp) setKeyChainConfigEnabled(enabled bool) {
 }
 
 func (a *guiApp) startKeyChainRunner(cfg runner.KeyChainConfig, log func(string)) {
-	take, store := makeLifecycleSlot[*runner.KeyChainRunner](&a.mu, &a.keychainRunner)
-	startLifecycle(
-		take, store,
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if a.shuttingDown.Load() {
+		return
+	}
+	take := func() lifecycleRunner {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.keychainRunner == nil {
+			return nil
+		}
+		old := a.keychainRunner
+		a.keychainRunner = nil
+		return old
+	}
+	store := func(r lifecycleRunner) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.keychainRunner = r.(*runner.KeyChainRunner)
+	}
+	replaceRunner(
+		take,
+		store,
 		"KeyChain",
 		log,
 		func() runner.InputSession {
@@ -430,7 +448,7 @@ func (a *guiApp) startKeyChainRunner(cfg runner.KeyChainConfig, log func(string)
 			return a.inputSession
 		},
 		func() bool { return cfg.Active() },
-		func(sess runner.InputSession) *runner.KeyChainRunner {
+		func(sess runner.InputSession) lifecycleRunner {
 			cfg.Session = sess
 			cfg.Log = log
 			return runner.NewKeyChain(cfg)
@@ -439,24 +457,13 @@ func (a *guiApp) startKeyChainRunner(cfg runner.KeyChainConfig, log func(string)
 }
 
 func (a *guiApp) stopKeyChainRunner() {
+	a.lifecycleMu.Lock()
 	a.mu.Lock()
 	kc := a.keychainRunner
 	a.keychainRunner = nil
 	a.mu.Unlock()
-	if kc != nil {
-		// Stop+Wait on a background goroutine to avoid
-		// deadlocking the GUI thread if the runner
-		// goroutine is in a Synchronize call.
-		go func(old *runner.KeyChainRunner) {
-			defer func() {
-				if r := recover(); r != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "PANIC in keyChain stop: %v\n%s\n", r, debug.Stack())
-				}
-			}()
-			old.Stop()
-			old.Wait()
-		}(kc)
-	}
+	a.lifecycleMu.Unlock()
+	stopRunnerAsync(kc)
 }
 
 func (a *guiApp) resetKeyChainSwitchData(switchIdx int) {

@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"runtime/debug"
 	"strconv"
 
 	"ezrokit/runner"
@@ -524,18 +522,12 @@ func (a *guiApp) syncAutoPotSettings() {
 		// If neither HP nor SP keys are bound, stop the runner
 		// instead of letting it spin doing nothing.
 		if !cfg.Core.HPEnabled && !cfg.Core.SPEnabled {
+			a.lifecycleMu.Lock()
 			a.mu.Lock()
 			a.autopotRunner = nil
 			a.mu.Unlock()
-			go func(old *runner.AutoPotRunner) {
-				defer func() {
-					if r := recover(); r != nil {
-						_, _ = fmt.Fprintf(os.Stderr, "PANIC in autopot stop: %v\n%s\n", r, debug.Stack())
-					}
-				}()
-				old.Stop()
-				old.Wait()
-			}(r)
+			a.lifecycleMu.Unlock()
+			stopRunnerAsync(r)
 			if a.overlay != nil {
 				a.overlay.SetMode("AutoPot off")
 			}
@@ -549,21 +541,14 @@ func (a *guiApp) syncAutoPotSettings() {
 		// it doesn't recreate the reader.
 		if cfg.IsAddressMode() != a.autopot.prevAutoPotAddressMode {
 			a.autopot.prevAutoPotAddressMode = cfg.IsAddressMode()
+			a.lifecycleMu.Lock()
 			a.mu.Lock()
 			a.autopotRunner = nil
 			a.mu.Unlock()
-			// Stop synchronously (fast — just sets the stop flag) so
-			// the new runner doesn't overlap with the old one on the
-			// same InputSession (VIIPER connection).
-			r.Stop()
-			go func(old *runner.AutoPotRunner) {
-				defer func() {
-					if r := recover(); r != nil {
-						_, _ = fmt.Fprintf(os.Stderr, "PANIC in autopot mode-switch wait: %v\n%s\n", r, debug.Stack())
-					}
-				}()
-				old.Wait()
-			}(r)
+			a.lifecycleMu.Unlock()
+			// Stop the old reader before starting the replacement so
+			// both runners do not overlap on the same session.
+			stopRunnerAsync(r)
 			a.startAutoPotRunner(cfg, a.guiLog(a.appendLog))
 			return
 		}

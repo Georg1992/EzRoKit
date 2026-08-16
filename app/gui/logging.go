@@ -5,8 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime/debug"
 	"time"
 )
 
@@ -25,11 +23,6 @@ func (a *guiApp) setupLogLimit() error {
 	}
 	t := time.NewTicker(30 * time.Second)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in log trimmer: %v\n%s\n", r, debug.Stack())
-			}
-		}()
 		defer t.Stop()
 		for {
 			select {
@@ -37,10 +30,10 @@ func (a *guiApp) setupLogLimit() error {
 				return
 			case <-t.C:
 			}
-			if a.logList == nil {
-				continue
-			}
 			a.mainWindow.Synchronize(func() {
+				if a.shuttingDown.Load() || a.logList == nil {
+					return
+				}
 				if len(a.logItems) > maxLogItems {
 					excess := len(a.logItems) - maxLogItems
 					a.logItems = a.logItems[excess:]

@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,11 +45,17 @@ type guiApp struct {
 	viiperBadge    *viiperBadge
 	profileLogRow  *walk.Composite
 
-	mu                  sync.Mutex
+	mu sync.Mutex
+	// lifecycleMu serializes GUI runner slot ownership with starts and
+	// stops. Without it, a stop could observe an empty slot between a
+	// runner's Start() and its publication, leaving that runner orphaned.
+	lifecycleMu         sync.Mutex
 	shutdownOnce        sync.Once
 	bindingActive       bool
 	logFile             *os.File
 	starting            atomic.Int32
+	stopping            atomic.Int32
+	shuttingDown        atomic.Bool
 	startupGeneration   atomic.Uint64
 	startupCancel       context.CancelFunc
 	viiperStartupCancel context.CancelFunc
@@ -96,6 +101,8 @@ func main() {
 
 func (a *guiApp) shutdown() {
 	a.shutdownOnce.Do(func() {
+		a.shuttingDown.Store(true)
+		a.lifecycleMu.Lock()
 		a.mu.Lock()
 		if a.lifetimeCancel != nil {
 			a.lifetimeCancel()
@@ -120,6 +127,7 @@ func (a *guiApp) shutdown() {
 			a.viiperStartupCancel = nil
 		}
 		a.mu.Unlock()
+		a.lifecycleMu.Unlock()
 
 		if a.viiperMonitor != nil {
 			a.viiperMonitor.stop()
@@ -435,7 +443,7 @@ func (a *guiApp) onStart() {
 		a.appendLog("Cannot start tools — VIIPER is not running. Start VIIPER first.")
 		return
 	}
-	if a.starting.Load() != 0 ||
+	if a.shuttingDown.Load() || a.stopping.Load() != 0 || a.starting.Load() != 0 ||
 		(a.runner != nil && a.runner.Running()) ||
 		(a.autopotRunner != nil && a.autopotRunner.Running()) ||
 		(a.timerKeyRunner != nil && a.timerKeyRunner.Running()) ||
@@ -510,23 +518,36 @@ func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 	cfg.Log = logFn
 
 	r := runner.New(cfg)
+	// Publish the clicker under the same ownership lock used by onStop and
+	// the other runner starters. Otherwise onStop could take an empty slot
+	// between Start() and publication, orphaning this live goroutine.
+	a.lifecycleMu.Lock()
+	if !isStillStarting() || a.shuttingDown.Load() {
+		a.lifecycleMu.Unlock()
+		r.Stop()
+		r.Wait()
+		return
+	}
 	if err := r.Start(); err != nil {
+		a.lifecycleMu.Unlock()
 		logFn(fmt.Sprintf("Start failed: %v", err))
 		finishFailure()
 		return
 	}
-
 	a.mu.Lock()
 	a.runner = r
 	a.mu.Unlock()
+	a.lifecycleMu.Unlock()
 	if !isStillStarting() {
-		r.Stop()
-		r.Wait()
+		a.lifecycleMu.Lock()
 		a.mu.Lock()
 		if a.runner == r {
 			a.runner = nil
 		}
 		a.mu.Unlock()
+		a.lifecycleMu.Unlock()
+		r.Stop()
+		r.Wait()
 		return
 	}
 
@@ -602,6 +623,8 @@ func (a *guiApp) startRemainingRunners(ctx context.Context, generation uint64, s
 // waits for each one to finish. It is used when startup is cancelled after a
 // subset of the tools has already been started.
 func (a *guiApp) stopStartedRunners() {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	a.mu.Lock()
 	r := a.runner
 	ap := a.autopotRunner
@@ -635,6 +658,8 @@ func (a *guiApp) stopStartedRunners() {
 // Start reuses it. The blocking Stop+Wait runs on a background goroutine.
 // VIIPER server is NOT stopped — it stays running for reuse.
 func (a *guiApp) onStop() {
+	a.stopping.Store(1)
+	a.lifecycleMu.Lock()
 	a.mu.Lock()
 	r := a.runner
 	ap := a.autopotRunner
@@ -655,16 +680,12 @@ func (a *guiApp) onStop() {
 		a.startupCancel = nil
 	}
 	a.mu.Unlock()
+	a.lifecycleMu.Unlock()
 
 	a.setToolsStarted(false)
 	a.appendLog("Stopping tools...")
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "PANIC in onStop: %v\n%s\n", r, debug.Stack())
-			}
-		}()
 		if r != nil {
 			r.Stop()
 			r.Wait()
@@ -691,14 +712,35 @@ func (a *guiApp) onStop() {
 			if a.overlay != nil {
 				a.overlay.ShowStopped()
 			}
+			a.stopping.Store(0)
 		})
 	}()
 }
 
 func (a *guiApp) startAutoPotRunner(cfg runner.AutoPotConfig, log func(string)) {
-	take, store := makeLifecycleSlot[*runner.AutoPotRunner](&a.mu, &a.autopotRunner)
-	startLifecycle(
-		take, store,
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if a.shuttingDown.Load() {
+		return
+	}
+	take := func() lifecycleRunner {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.autopotRunner == nil {
+			return nil
+		}
+		old := a.autopotRunner
+		a.autopotRunner = nil
+		return old
+	}
+	store := func(r lifecycleRunner) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.autopotRunner = r.(*runner.AutoPotRunner)
+	}
+	replaceRunner(
+		take,
+		store,
 		"AutoPot",
 		log,
 		func() runner.InputSession {
@@ -707,7 +749,7 @@ func (a *guiApp) startAutoPotRunner(cfg runner.AutoPotConfig, log func(string)) 
 			return a.inputSession
 		},
 		func() bool { return cfg.Core.HPEnabled || cfg.Core.SPEnabled },
-		func(sess runner.InputSession) *runner.AutoPotRunner {
+		func(sess runner.InputSession) lifecycleRunner {
 			cfg.Core.Session = sess
 			cfg.Core.Log = log
 			return runner.NewAutoPot(cfg)

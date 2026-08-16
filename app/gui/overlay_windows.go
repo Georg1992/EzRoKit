@@ -57,11 +57,11 @@ type statusOverlay struct {
 	// HP/SP values shown next to the running indicator.
 	// For OCR and Address reading: raw values (hp/hpMax, sp/spMax).
 	// For Pixelsearch: percentages (hp=50, hpMax=100, sp=30, spMax=100).
-	valuesHP         int
-	valuesHPMax      int
-	valuesSP         int
-	valuesSPMax      int
-	valuesLastPaint  time.Time // last InvalidateRect from SetValues; rate-limited to ~5 fps
+	valuesHP        int
+	valuesHPMax     int
+	valuesSP        int
+	valuesSPMax     int
+	valuesLastPaint time.Time // last InvalidateRect from SetValues; rate-limited to ~5 fps
 }
 
 // newStatusOverlay creates and returns a hidden overlay window.
@@ -142,6 +142,7 @@ func (o *statusOverlay) onPaint(hwnd win.HWND) {
 	running := o.running
 	mode := o.mode
 	hp, hpMax, sp, spMax := o.valuesHP, o.valuesHPMax, o.valuesSP, o.valuesSPMax
+	font := o.font
 	o.mu.Unlock()
 
 	var ps win.PAINTSTRUCT
@@ -159,7 +160,7 @@ func (o *statusOverlay) onPaint(hwnd win.HWND) {
 	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&rc)), bgBrush)
 	win.DeleteObject(win.HGDIOBJ(bgBrush))
 
-	oldFont := win.SelectObject(hdc, win.HGDIOBJ(o.font))
+	oldFont := win.SelectObject(hdc, win.HGDIOBJ(font))
 	defer win.SelectObject(hdc, oldFont)
 	win.SetBkMode(hdc, 1) // TRANSPARENT
 
@@ -214,15 +215,21 @@ func runningText(running bool) string {
 // "Address reading"). Sets running=true. Shows the overlay and repaints immediately.
 // Pass "" to hide the label. Safe from any goroutine.
 func (o *statusOverlay) SetMode(mode string) {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
 	o.mu.Lock()
-	o.running = true
-	o.mode = mode
+	hwnd := o.hwnd
+	if hwnd != 0 {
+		o.running = true
+		o.mode = mode
+	}
 	o.mu.Unlock()
-	win.ShowWindow(o.hwnd, win.SW_SHOWNOACTIVATE)
-	win.InvalidateRect(o.hwnd, nil, true)
+	if hwnd == 0 {
+		return
+	}
+	win.ShowWindow(hwnd, win.SW_SHOWNOACTIVATE)
+	win.InvalidateRect(hwnd, nil, true)
 }
 
 // SetValues stores HP/SP values to display next to the running indicator.
@@ -236,10 +243,15 @@ func (o *statusOverlay) SetMode(mode string) {
 // game window is focused, Windows processes WM_PAINT at full speed and
 // 100 fps repaints cause visible text flicker in the overlay.
 func (o *statusOverlay) SetValues(hp, hpMax, sp, spMax int) {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
 	o.mu.Lock()
+	if o.hwnd == 0 {
+		o.mu.Unlock()
+		return
+	}
+	hwnd := o.hwnd
 	o.valuesHP = hp
 	o.valuesHPMax = hpMax
 	o.valuesSP = sp
@@ -251,47 +263,60 @@ func (o *statusOverlay) SetValues(hp, hpMax, sp, spMax int) {
 	}
 	o.valuesLastPaint = now
 	o.mu.Unlock()
-	win.InvalidateRect(o.hwnd, nil, true)
+	win.InvalidateRect(hwnd, nil, true)
 }
 
 // ClearValues resets the HP/SP display.
 func (o *statusOverlay) ClearValues() {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
 	o.mu.Lock()
+	if o.hwnd == 0 {
+		o.mu.Unlock()
+		return
+	}
+	hwnd := o.hwnd
 	o.valuesHP = 0
 	o.valuesHPMax = 0
 	o.valuesSP = 0
 	o.valuesSPMax = 0
 	o.mu.Unlock()
-	win.InvalidateRect(o.hwnd, nil, true)
+	win.InvalidateRect(hwnd, nil, true)
 }
 
 // SetPanelRect repositions the overlay directly below the given panel rect
 // (x, y, w, h) with a 3px gap. When panel is empty (w==0), the overlay
 // stays at its current position. Safe from any goroutine.
 func (o *statusOverlay) SetPanelRect(x, y, w, h int) {
-	if o == nil || o.hwnd == 0 {
+	if o == nil || w == 0 || h == 0 {
 		return
 	}
-	if w == 0 || h == 0 {
+	o.mu.Lock()
+	hwnd := o.hwnd
+	o.mu.Unlock()
+	if hwnd == 0 {
 		return
 	}
 	// Position directly below the panel with a 12px gap to avoid overlapping
 	// the in-game status panel.
 	newY := int32(y + h + 12)
-	win.SetWindowPos(o.hwnd, 0, int32(x), newY, 230, 32, win.SWP_NOACTIVATE|win.SWP_NOZORDER|win.SWP_SHOWWINDOW)
+	win.SetWindowPos(hwnd, 0, int32(x), newY, 230, 32, win.SWP_NOACTIVATE|win.SWP_NOZORDER|win.SWP_SHOWWINDOW)
 }
 
 // ShowStopped sets running=false and mode="Stopped" so the overlay displays
 // "● Tools OFF" in red with "[Stopped]" below. Shows the overlay and repaints
 // immediately.
 func (o *statusOverlay) ShowStopped() {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
 	o.mu.Lock()
+	hwnd := o.hwnd
+	if hwnd == 0 {
+		o.mu.Unlock()
+		return
+	}
 	o.running = false
 	o.mode = "Stopped"
 	o.valuesHP = 0
@@ -299,26 +324,38 @@ func (o *statusOverlay) ShowStopped() {
 	o.valuesSP = 0
 	o.valuesSPMax = 0
 	o.mu.Unlock()
-	win.ShowWindow(o.hwnd, win.SW_SHOWNOACTIVATE)
-	win.InvalidateRect(o.hwnd, nil, true)
+	win.ShowWindow(hwnd, win.SW_SHOWNOACTIVATE)
+	win.InvalidateRect(hwnd, nil, true)
 }
 
 // Hide hides the overlay without destroying it.
 func (o *statusOverlay) Hide() {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
-	win.ShowWindow(o.hwnd, win.SW_HIDE)
+	o.mu.Lock()
+	hwnd := o.hwnd
+	o.mu.Unlock()
+	if hwnd != 0 {
+		win.ShowWindow(hwnd, win.SW_HIDE)
+	}
 }
 
 // Destroy releases the overlay window and its GDI resources.
 func (o *statusOverlay) Destroy() {
-	if o.font != 0 {
-		win.DeleteObject(win.HGDIOBJ(o.font))
-		o.font = 0
+	if o == nil {
+		return
 	}
-	if o.hwnd != 0 {
-		win.DestroyWindow(o.hwnd)
-		o.hwnd = 0
+	o.mu.Lock()
+	font := o.font
+	hwnd := o.hwnd
+	o.font = 0
+	o.hwnd = 0
+	o.mu.Unlock()
+	if font != 0 {
+		win.DeleteObject(win.HGDIOBJ(font))
+	}
+	if hwnd != 0 {
+		win.DestroyWindow(hwnd)
 	}
 }

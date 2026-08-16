@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"runtime/debug"
 	"strconv"
 
 	"ezrokit/runner"
@@ -229,18 +227,12 @@ func (a *guiApp) syncTimerKeySettings() {
 		if !cfg.AnyActive() {
 			// Nil the runner immediately so isStarted() and
 			// subsequent sync calls see a stopped state.
+			a.lifecycleMu.Lock()
 			a.mu.Lock()
 			a.timerKeyRunner = nil
 			a.mu.Unlock()
-			go func(old *runner.TimerKeyRunner) {
-				defer func() {
-					if r := recover(); r != nil {
-						_, _ = fmt.Fprintf(os.Stderr, "PANIC in timerKey stop: %v\n%s\n", r, debug.Stack())
-					}
-				}()
-				old.Stop()
-				old.Wait()
-			}(t)
+			a.lifecycleMu.Unlock()
+			stopRunnerAsync(t)
 			return
 		}
 		t.UpdateSettings(cfg)
@@ -265,9 +257,29 @@ func (a *guiApp) setTimerKeyConfigEnabled(enabled bool) {
 }
 
 func (a *guiApp) startTimerKeyRunner(cfg runner.TimerKeyConfig, log func(string)) {
-	take, store := makeLifecycleSlot[*runner.TimerKeyRunner](&a.mu, &a.timerKeyRunner)
-	startLifecycle(
-		take, store,
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if a.shuttingDown.Load() {
+		return
+	}
+	take := func() lifecycleRunner {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.timerKeyRunner == nil {
+			return nil
+		}
+		old := a.timerKeyRunner
+		a.timerKeyRunner = nil
+		return old
+	}
+	store := func(r lifecycleRunner) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.timerKeyRunner = r.(*runner.TimerKeyRunner)
+	}
+	replaceRunner(
+		take,
+		store,
 		"Timer keys",
 		log,
 		func() runner.InputSession {
@@ -276,7 +288,7 @@ func (a *guiApp) startTimerKeyRunner(cfg runner.TimerKeyConfig, log func(string)
 			return a.inputSession
 		},
 		func() bool { return cfg.AnyActive() },
-		func(sess runner.InputSession) *runner.TimerKeyRunner {
+		func(sess runner.InputSession) lifecycleRunner {
 			cfg.Session = sess
 			cfg.Log = log
 			return runner.NewTimerKey(cfg)
