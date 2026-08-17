@@ -136,6 +136,58 @@ func TestClicker_HeldKeysRunIndependently(t *testing.T) {
 	}
 }
 
+func TestClicker_UnboundPhysicalKeyDoesNotInterruptTrigger(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+
+	var mu sync.Mutex
+	held := map[int32]bool{}
+	PhysicalKeyDown = func(vk int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return held[vk]
+	}
+
+	sess := &clickerTestSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: false},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		r.Stop()
+		r.Wait()
+	}()
+
+	mu.Lock()
+	held['D'] = true
+	mu.Unlock()
+	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
+
+	before := countKeyEvents(sess.snapshot(), 'D')
+	mu.Lock()
+	held['X'] = true
+	mu.Unlock()
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	held['X'] = false
+	mu.Unlock()
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if countKeyEvents(sess.snapshot(), 'D') > before {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("unbound X interrupted held D: before=%d after=%d events=%v", before, countKeyEvents(sess.snapshot(), 'D'), sess.snapshot())
+}
+
 func countKeyEvents(events []clickerEvent, vk int32) int {
 	n := 0
 	for _, event := range events {
@@ -204,7 +256,7 @@ func waitForKeyEvent(t *testing.T, sess *clickerTestSession, vk int32, timeout t
 	t.Fatalf("timed out waiting for key %d: %v", vk, sess.snapshot())
 }
 
-func TestClicker_ReleasedTriggerStopsAfterGrace(t *testing.T) {
+func TestClicker_ReleasedTriggerStopsImmediately(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 
@@ -236,7 +288,7 @@ func TestClicker_ReleasedTriggerStopsAfterGrace(t *testing.T) {
 	mu.Lock()
 	held = false
 	mu.Unlock()
-	time.Sleep(ClickerReleaseGrace + 40*time.Millisecond)
+	time.Sleep(timing.PollInterval + 20*time.Millisecond)
 	stoppedAt := countKeyEvents(sess.snapshot(), 'D')
 	time.Sleep(50 * time.Millisecond)
 	if got := countKeyEvents(sess.snapshot(), 'D'); got != stoppedAt {

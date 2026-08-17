@@ -28,11 +28,6 @@ const (
 	// ensure the mouse-down report is transmitted before mouse-up.
 	ClickerClickHold = 2 * timing.HIDPollInterval
 
-	// ClickerReleaseGrace is a single polling interval. Release must be
-	// fail-safe: an uncertain trigger state stops output rather than risking
-	// continued input after the user lets go.
-	ClickerReleaseGrace = timing.PollInterval
-
 	clickerTriggerCount = ClickerSlotCount * ClickerKeysPerBind
 )
 
@@ -124,10 +119,9 @@ func KeysText(vks [ClickerKeysPerBind]int32) string {
 }
 
 type clickerKeyState struct {
-	vk         int32
-	down       bool
-	releasedAt time.Time
-	nextDue    time.Time
+	vk      int32
+	down    bool
+	nextDue time.Time
 }
 
 // run keeps one bounded synchronous loop. Trigger release is checked between
@@ -162,15 +156,11 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 					state.down = true
 					state.nextDue = now
 				}
-				state.releasedAt = time.Time{}
 			} else if state.down {
-				if state.releasedAt.IsZero() {
-					state.releasedAt = now
-				} else if now.Sub(state.releasedAt) >= ClickerReleaseGrace {
-					state.down = false
-					state.releasedAt = time.Time{}
-					state.nextDue = time.Time{}
-				}
+				// A physical release stops this trigger immediately. A cycle
+				// already in progress is allowed to finish its current action.
+				state.down = false
+				state.nextDue = time.Time{}
 			}
 			if !state.down {
 				continue

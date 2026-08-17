@@ -2,9 +2,18 @@
 
 package runner
 
-import windows "ezrokit/runner/platform/windows"
+import (
+	"context"
+
+	windows "ezrokit/runner/platform/windows"
+)
 
 func init() {
-	PhysicalKeyDown = windows.WinPhysicalKeyDown
+	PhysicalKeyDown = windows.PhysicalKeyDown
 	PollKeyToggle = windows.WinPollKeyToggle
+}
+
+// StartPhysicalKeyboard starts physical-key tracking for trigger polling.
+func StartPhysicalKeyboard(ctx context.Context) error {
+	return windows.StartPhysicalKeyboard(ctx)
 }
