@@ -36,6 +36,19 @@ func (s *clickerTestSession) MouseClick(_ time.Duration) error {
 	s.mu.Unlock()
 	return nil
 }
+func (s *clickerTestSession) TapKeyThenMouseClick(vk int32, _, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failKeys {
+		return fmt.Errorf("key failed")
+	}
+	now := time.Now()
+	s.events = append(s.events,
+		clickerEvent{kind: "key", vk: vk, at: now},
+		clickerEvent{kind: "mouse", at: now},
+	)
+	return nil
+}
 func (s *clickerTestSession) snapshot() []clickerEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -294,6 +307,61 @@ func TestClicker_ReleasedTriggerStopsImmediately(t *testing.T) {
 	if got := countKeyEvents(sess.snapshot(), 'D'); got != stoppedAt {
 		t.Fatalf("released trigger kept cycling: %d then %d events", stoppedAt, got)
 	}
+}
+
+func TestClicker_EmergencyToggleStopsRunawayClicker(t *testing.T) {
+	origPhysical := PhysicalKeyDown
+	origEmergency := EmergencyKeyDown
+	defer func() {
+		PhysicalKeyDown = origPhysical
+		EmergencyKeyDown = origEmergency
+	}()
+
+	var mu sync.Mutex
+	emergency := false
+	PhysicalKeyDown = func(int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return true
+	}
+	EmergencyKeyDown = func(int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return emergency
+	}
+
+	sess := &clickerTestSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
+	mu.Lock()
+	emergency = true
+	mu.Unlock()
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for r.Running() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if r.Running() {
+		r.Stop()
+		r.Wait()
+		t.Fatal("emergency toggle did not stop clicker")
+	}
+	stoppedAt := len(sess.snapshot())
+	time.Sleep(50 * time.Millisecond)
+	if got := len(sess.snapshot()); got != stoppedAt {
+		t.Fatalf("clicker emitted after emergency stop: %d then %d events", stoppedAt, got)
+	}
+	r.Wait()
 }
 
 func TestClicker_FailedKeyDoesNotEmitMouse(t *testing.T) {

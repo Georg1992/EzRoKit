@@ -18,10 +18,12 @@ type ViiperSession struct {
 	busID      uint32
 	createdBus bool
 
-	// Keyboard and mouse writes use separate locks so a clicker's mouse
-	// cycle does not block unrelated keyboard input.
-	stateMu sync.RWMutex
-	closed  bool
+	// actionMu serializes logical input actions. In particular, a clicker's
+	// key tap and mouse click must remain one ordered operation even when
+	// another runner is trying to send a key at the same time.
+	stateMu  sync.RWMutex
+	actionMu sync.Mutex
+	closed   bool
 
 	keyMu       sync.Mutex
 	mouseMu     sync.Mutex
@@ -110,12 +112,14 @@ func (s *ViiperSession) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), timing.SessionCloseWait)
 		defer cancel()
 
+		s.actionMu.Lock()
 		s.keyMu.Lock()
 		_ = keyUpLocked(s.keyStream)
 		s.keyMu.Unlock()
 		s.mouseMu.Lock()
 		_ = mouseUpLocked(s.mouseStream)
 		s.mouseMu.Unlock()
+		s.actionMu.Unlock()
 
 		_ = s.keyStream.Close()
 		_ = s.mouseStream.Close()

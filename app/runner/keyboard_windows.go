@@ -10,7 +10,8 @@ import (
 
 func init() {
 	PhysicalKeyDown = windows.PhysicalKeyDown
-	PollKeyToggle = windows.WinPollKeyToggle
+	EmergencyKeyDown = windows.AsyncKeyDown
+	PollKeyToggle = windows.PollKeyToggle
 }
 
 // StartPhysicalKeyboard starts physical-key tracking for trigger polling.

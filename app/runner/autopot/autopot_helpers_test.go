@@ -2,6 +2,7 @@ package autopot
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -223,3 +224,57 @@ func (s *recordSession) TapKey(vk int32, hold time.Duration) error {
 }
 
 func (s *recordSession) MouseClick(_ time.Duration) error { return nil }
+
+type guardedTapSession struct {
+	mu      sync.Mutex
+	events  []string
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *guardedTapSession) TapKey(vk int32, hold time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	label := fmt.Sprintf("key-%c", vk)
+	s.events = append(s.events, label+"-start")
+	s.once.Do(func() { close(s.started) })
+	time.Sleep(hold)
+	s.events = append(s.events, label+"-end")
+	return nil
+}
+
+func (s *guardedTapSession) MouseClick(_ time.Duration) error { return nil }
+
+func (s *guardedTapSession) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.events...)
+}
+
+func TestHealer_TapCannotBeInterruptedByAnotherKey(t *testing.T) {
+	sess := &guardedTapSession{started: make(chan struct{})}
+	h := &healer{}
+	cfg := AutoPotConfig{Core: CoreConfig{Session: sess, Log: func(string) {}}}
+
+	done := make(chan struct{})
+	go func() {
+		h.healTap(context.Background(), cfg, 'Q')
+		close(done)
+	}()
+	<-sess.started
+	if err := sess.TapKey('X', time.Millisecond); err != nil {
+		t.Fatalf("competing key: %v", err)
+	}
+	<-done
+
+	events := sess.snapshot()
+	want := []string{"key-Q-start", "key-Q-end", "key-X-start", "key-X-end"}
+	if len(events) != len(want) {
+		t.Fatalf("another key interrupted AutoPot tap: got %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("event %d = %q, want %q: %v", i, events[i], want[i], events)
+		}
+	}
+}

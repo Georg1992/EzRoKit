@@ -15,12 +15,15 @@ import (
 
 const (
 	wmInput               = 0x00FF
+	wmInputDeviceChange   = 0x00FE
 	wmQuit                = 0x0012
 	ridInput              = 0x10000003
 	ridiDeviceName        = 0x20000007
 	rimTypeKeyboard       = 1
 	riKeyBreak            = 0x0001
 	ridevInputSink        = 0x00000100
+	ridevDevNotify        = 0x00002000
+	gidRemoval            = 2
 	hwndMessage           = ^uintptr(2)
 	virtualKeyboardVIDPID = "VID_2E8A&PID_0010"
 )
@@ -82,9 +85,11 @@ type rawWindowClass struct {
 type physicalKeyboard struct {
 	mu sync.RWMutex
 
-	// down contains only keys from real keyboard devices. The clicker reads
-	// this map, so VIIPER's own keyboard reports must never change it.
-	down map[int32]bool
+	// devices stores key state separately for every physical keyboard. The
+	// aggregate map below remains down until every physical device holding a
+	// key has reported its release.
+	devices map[uintptr]map[int32]bool
+	down    map[int32]int
 
 	// virtualDevices caches the device classification. Keeping this separate
 	// from key state prevents a virtual key-up from clearing a physical key
@@ -110,8 +115,9 @@ var (
 	procGetCurrentThreadID      = rawKernel32.NewProc("GetCurrentThreadId")
 	procGetModuleHandleW        = rawKernel32.NewProc("GetModuleHandleW")
 
-	rawState    = &physicalKeyboard{
-		down:          make(map[int32]bool),
+	rawState = &physicalKeyboard{
+		devices:        make(map[uintptr]map[int32]bool),
+		down:           make(map[int32]int),
 		virtualDevices: make(map[uintptr]bool),
 	}
 	rawWndProc  uintptr
@@ -133,7 +139,49 @@ func StartPhysicalKeyboard(ctx context.Context) error {
 func PhysicalKeyDown(vk int32) bool {
 	rawState.mu.RLock()
 	defer rawState.mu.RUnlock()
-	return rawState.down[vk]
+	return rawState.down[vk] > 0
+}
+
+func (p *physicalKeyboard) setKey(device uintptr, vk int32, down bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	keys := p.devices[device]
+	if keys == nil {
+		keys = make(map[int32]bool)
+		p.devices[device] = keys
+	}
+	wasDown := keys[vk]
+	if wasDown == down {
+		return // Ignore autorepeat make packets and duplicate releases.
+	}
+	keys[vk] = down
+	if down {
+		p.down[vk]++
+		return
+	}
+	if p.down[vk] <= 1 {
+		delete(p.down, vk)
+	} else {
+		p.down[vk]--
+	}
+}
+
+func (p *physicalKeyboard) removeDevice(device uintptr) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for vk, down := range p.devices[device] {
+		if down {
+			if p.down[vk] <= 1 {
+				delete(p.down, vk)
+			} else {
+				p.down[vk]--
+			}
+		}
+	}
+	delete(p.devices, device)
+	delete(p.virtualDevices, device)
 }
 
 func startPhysicalKeyboard(ctx context.Context) error {
@@ -147,11 +195,15 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 	className, _ := syscall.UTF16PtrFromString("EzRoKitPhysicalKeyboard")
 
 	rawWndProc = syscall.NewCallback(func(hwnd, message, wParam, lParam uintptr) uintptr {
-		if uint32(message) == wmInput {
+		switch uint32(message) {
+		case wmInput:
 			handleRawInput(lParam)
 			// WM_INPUT is one of the messages for which Windows expects the
-			// default window procedure to perform message cleanup. Returning
-			// immediately can eventually make raw input state unreliable.
+			// default window procedure to perform message cleanup.
+		case wmInputDeviceChange:
+			if wParam == gidRemoval {
+				rawState.removeDevice(lParam)
+			}
 		}
 		return callDefWindowProc(hwnd, message, wParam, lParam)
 	})
@@ -187,7 +239,7 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 	device := rawInputDevice{
 		usagePage: 0x01, // Generic Desktop
 		usage:     0x06, // Keyboard
-		flags:     ridevInputSink,
+		flags:     ridevInputSink | ridevDevNotify,
 		target:    hwnd,
 	}
 	if result, _, err := procRegisterRawInputDevices.Call(
@@ -217,6 +269,14 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 	}
 
 	procDestroyWindow.Call(hwnd)
+	clearPhysicalKeyState()
+}
+
+func clearPhysicalKeyState() {
+	rawState.mu.Lock()
+	rawState.devices = make(map[uintptr]map[int32]bool)
+	rawState.down = make(map[int32]int)
+	rawState.mu.Unlock()
 }
 
 func callDefWindowProc(hwnd, message, wParam, lParam uintptr) uintptr {
@@ -253,9 +313,7 @@ func handleRawInput(handle uintptr) {
 		return
 	}
 	down := input.keyboard.flags&riKeyBreak == 0
-	rawState.mu.Lock()
-	rawState.down[vk] = down
-	rawState.mu.Unlock()
+	rawState.setKey(input.header.device, vk, down)
 }
 
 func isVirtualKeyboard(device uintptr) bool {

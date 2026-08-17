@@ -131,6 +131,15 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 	var states [clickerTriggerCount]clickerKeyState
 
 	for ctx.Err() == nil {
+		// End/F12 are an emergency stop independent of the GUI callback.
+		// This prevents a runaway clicker from depending on a responsive
+		// window message loop to terminate.
+		for _, vk := range timing.ToggleVKs {
+			if EmergencyKeyDown(vk) {
+				return
+			}
+		}
+
 		current := r.settings()
 		now := time.Now()
 		anyMapped := false
@@ -198,10 +207,21 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 	}
 }
 
-// fireCycle emits a key tap and, when enabled, a mouse click. The two
-// operations use the same simple InputSession API as every other runner.
+// fireCycle emits one complete clicker cycle. When mouse clicking is
+// enabled, an OrderedInputSession keeps the key tap and mouse click adjacent
+// even while another runner is sending input.
 // It returns true when cancellation was observed and the runner should stop.
 func (r *Runner) fireCycle(ctx context.Context, sess session.InputSession, log func(string), slot ClickerSlot, vk int32) bool {
+	if ordered, ok := sess.(session.OrderedInputSession); ok && slot.MouseClick {
+		if err := ordered.TapKeyThenMouseClick(vk, ClickerKeyTapHold, ClickerClickHold); err != nil {
+			if ctx.Err() != nil {
+				return true
+			}
+			log(fmt.Sprintf("clicker key/mouse cycle for %s failed: %v", KeyName(vk), err))
+		}
+		return ctx.Err() != nil
+	}
+
 	if err := sess.TapKey(vk, ClickerKeyTapHold); err != nil {
 		if ctx.Err() != nil {
 			return true
@@ -209,16 +229,19 @@ func (r *Runner) fireCycle(ctx context.Context, sess session.InputSession, log f
 		log(fmt.Sprintf("clicker key %s failed: %v", KeyName(vk), err))
 		return false
 	}
-	if !slot.MouseClick || ctx.Err() != nil {
+	if !slot.MouseClick {
 		return ctx.Err() != nil
 	}
+
+	// Once a key tap has started, complete the mouse half of the cycle even
+	// if cancellation was requested. This preserves the key -> mouse pair.
 	if err := sess.MouseClick(ClickerClickHold); err != nil {
 		if ctx.Err() != nil {
 			return true
 		}
 		log(fmt.Sprintf("clicker mouse click failed: %v", err))
 	}
-	return false
+	return ctx.Err() != nil
 }
 
 func slotDelay(slot ClickerSlot) time.Duration {
