@@ -15,12 +15,12 @@
 // text (low HP/SP state) become the same foreground mask, so
 // font-color changes do not affect the read.
 //
-// The reader uses a per-frame glyph hint to short-circuit template
-// scanning: when the component count matches the previous frame,
-// each glyph is tested against the prior frame's glyph first at a
-// high confidence threshold (0.90). If it matches, the full O(n)
-// template scan is skipped. This makes stable HP/SP reads O(1)
-// per glyph; only changed values pay the full scan cost.
+// Every glyph is matched against every template on every frame. A
+// full strip parse costs ~170µs, so there is no cache or hint to
+// shortcut it: a shortcut that trusts the previous frame's glyph
+// cannot tell a digit that stayed the same from one that changed
+// into a similar shape, and reporting a stale digit is exactly the
+// failure this reader must not have.
 //
 // The reader is constructed once via NewReader(templatesDir),
 // which loads every PNG from templates/glyphs/ and pre-binarizes
@@ -34,6 +34,10 @@
 // the fraction of pixels that agree after the candidate has
 // been resized to the template's bounding-box dimensions via
 // nearest-neighbour.
+//
+// Because that score counts background agreement too, a wrong
+// digit still scores high — see minGlyphMargin, which is what
+// actually separates a digit from the one it resembles.
 //
 // Reader is safe for concurrent Read callers as long as no other
 // goroutine mutates its public fields during a Read in flight.
@@ -63,6 +67,8 @@ import (
 //
 //   - "no_components"            — strip has no measurable foreground.
 //   - "low_glyph_score"          — best match below MinGlyphScore.
+//   - "ambiguous_glyph"          — best match too close to the
+//     runner-up template to tell them apart (see minGlyphMargin).
 //   - "parse_failed"             — assembled text didn't match the
 //     HP/SP regex.
 //   - "value_validation_failed"  — regex matched but hp/hpMax or
@@ -102,9 +108,8 @@ type Reader struct {
 	Debug         bool
 	DebugDir      string
 
-	mu         sync.RWMutex
-	templates  []templateEntry // sorted by rune for deterministic match logging
-	prevGlyphs []rune          // glyph sequence from last successful Read; nil until first success
+	mu        sync.RWMutex
+	templates []templateEntry // sorted by rune for deterministic match logging
 }
 
 // templateEntry is a single loaded template: source filename,
@@ -272,7 +277,6 @@ func (r *Reader) Read(strip image.Image) Result {
 	minScore := r.MinGlyphScore
 	debug := r.Debug
 	debugDir := r.DebugDir
-	prevGlyphs := r.prevGlyphs
 	r.mu.RUnlock()
 
 	if minScore == 0 {
@@ -287,9 +291,7 @@ func (r *Reader) Read(strip image.Image) Result {
 		return res
 	}
 	cropped := maskCrop(mask, bounds)
-	cropW := len(cropped[0])
-	cropH := len(cropped)
-	comps := findComponents(cropped, image.Rect(0, 0, cropW, cropH))
+	comps := findComponents(cropped)
 	if len(comps) == 0 {
 		res := Result{OK: false, Reason: "no_components"}
 		emitDebug(debug, debugDir, strip, mask, bounds, nil, res)
@@ -297,20 +299,12 @@ func (r *Reader) Read(strip image.Image) Result {
 	}
 
 	// Match each component, in left-to-right strip order.
-	// When the component count matches the previous frame, pass the prior
-	// glyph at each position as a hint so matchGlyphHinted can short-circuit
-	// the full template scan for unchanged digits.
 	matches := make([]matchRec, 0, len(comps))
 	var text strings.Builder
 	var scores []float64
-	usePrev := len(prevGlyphs) == len(comps)
 	for i, cLocal := range comps {
 		glyph := maskCrop(cropped, cLocal)
-		var hint rune
-		if usePrev {
-			hint = prevGlyphs[i]
-		}
-		ch, score := matchGlyphHinted(glyph, templates, hint)
+		ch, score, margin := matchGlyph(glyph, templates)
 		rect := image.Rect(
 			bounds.Min.X+cLocal.Min.X,
 			bounds.Min.Y+cLocal.Min.Y,
@@ -318,12 +312,11 @@ func (r *Reader) Read(strip image.Image) Result {
 			bounds.Min.Y+cLocal.Max.Y,
 		)
 		matches = append(matches, matchRec{idx: i, ch: ch, score: score, rect: rect})
-		if score < minScore {
-			tail := text.String() + string(ch) + "<reject>"
+		if reason := rejectGlyph(score, minScore, margin); reason != "" {
 			res := Result{
 				OK:         false,
-				Reason:     "low_glyph_score",
-				Text:       tail,
+				Reason:     reason,
+				Text:       text.String() + string(ch) + "<reject>",
 				Confidence: mean(scores),
 			}
 			emitDebug(debug, debugDir, strip, mask, bounds, matches, res)
@@ -358,16 +351,21 @@ func (r *Reader) Read(strip image.Image) Result {
 	}
 
 	res.OK = true
-	// Store the matched glyph sequence so the next call can use it as a hint.
-	glyphs := make([]rune, len(matches))
-	for j, m := range matches {
-		glyphs[j] = m.ch
-	}
-	r.mu.Lock()
-	r.prevGlyphs = glyphs
-	r.mu.Unlock()
 	emitDebug(debug, debugDir, strip, mask, bounds, matches, res)
 	return res
+}
+
+// rejectGlyph names the reason a matched glyph cannot be trusted, or "" when it
+// can: too poor a match to be a glyph at all, or too close a match to the
+// template it resembles to say which one it is.
+func rejectGlyph(score, minScore, margin float64) string {
+	switch {
+	case score < minScore:
+		return "low_glyph_score"
+	case margin < minGlyphMargin:
+		return "ambiguous_glyph"
+	}
+	return ""
 }
 
 // mean returns the mean of a float slice, or 0 for an empty slice.
@@ -534,7 +532,7 @@ const minGlyphArea = 4
 //
 // Returned components are sorted left-to-right by Min.X so
 // text reconstruction is in reading order.
-func findComponents(mask [][]bool, _ image.Rectangle) []image.Rectangle {
+func findComponents(mask [][]bool) []image.Rectangle {
 	w := maskWidth(mask)
 	h := maskHeight(mask)
 	if w == 0 || h == 0 {
@@ -617,28 +615,41 @@ func floodFillCC(mask, visited [][]bool, sx, sy int) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-// matchGlyph finds the closest template for a single glyph
-// mask. Returns the best rune and its equal-pixel score.
+// minGlyphMargin is how far ahead of the runner-up the winning
+// template must finish for the match to count.
+//
+// The score counts agreeing pixels including background, so a
+// wrong digit still scores high. Measured against the glyphs this
+// game renders, the '8' template scores 0.950 on a real '6', '8'
+// scores 0.900 on a '3', and '0' scores 0.875 on a '9' — while
+// the correct template scores 1.000 on every one of them. So
+// MinGlyphScore at 0.70 only rejects garbage; it sits far below
+// the point where digits get confused for each other, and this
+// margin is what separates them. A glyph degraded until its two
+// best candidates converge is rejected, and the reader hands over
+// to pixel search instead of reporting a plausible wrong number.
+const minGlyphMargin = 0.03
+
+// matchGlyph finds the closest template for a single glyph mask.
+// It returns the winning rune, its equal-pixel score, and how far
+// that score finished ahead of the runner-up template.
 //
 // Both candidate and template must be at least 1×1; if either
-// is empty, the match is degenerate and returns (0, 0).
+// is empty, the match is degenerate and returns (0, 0, 0).
 //
-// Resize is nearest-neighbor; ties are broken in favour of the
-// template whose rune sorts earlier, so match-log is stable
-// across runs.
-//
-// bestScore starts at 0 (NOT -1) so all-zero-score templates
-// (e.g. an empty resize) do NOT win the first iteration; only
-// templates with score > 0 are considered, which means empty
-// or all-mismatched candidates correctly return (0, 0) below.
-func matchGlyph(glyph [][]bool, templates []templateEntry) (rune, float64) {
+// Resize is nearest-neighbor. Scores start at 0 (NOT -1) so an
+// all-zero-score template cannot win by being first. Equal scores
+// leave the earlier rune in front, which also makes the margin 0 —
+// a real tie is then rejected by the caller instead of being
+// settled alphabetically.
+func matchGlyph(glyph [][]bool, templates []templateEntry) (rune, float64, float64) {
 	gH := maskHeight(glyph)
 	gW := maskWidth(glyph)
 	if gH == 0 || gW == 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
 	var bestRune rune
-	var bestScore float64
+	var bestScore, runnerUp float64
 	for _, t := range templates {
 		tH := t.bounds.Dy()
 		tW := t.bounds.Dx()
@@ -657,58 +668,15 @@ func matchGlyph(glyph [][]bool, templates []templateEntry) (rune, float64) {
 			continue
 		}
 		resized := resizeMaskNearest(glyph, gW, gH, tW, tH)
-		score := maskEqualFraction(resized, t.mask)
-		if score > bestScore || (score == bestScore && bestRune != 0 && t.rune < bestRune) {
-			bestScore = score
+		switch score := maskEqualFraction(resized, t.mask); {
+		case score > bestScore:
+			bestScore, runnerUp = score, bestScore
 			bestRune = t.rune
+		case score > runnerUp:
+			runnerUp = score
 		}
 	}
-	return bestRune, bestScore
-}
-
-// hintMinScore is the early-exit threshold for matchGlyphHinted.
-// It is set above the default MinGlyphScore (0.70) so that a hint
-// is only accepted when the match is unambiguous. A changed digit
-// (different shape) scores well below 0.90 against the old template
-// and falls through to the full matchGlyph search.
-const hintMinScore = 0.90
-
-// matchGlyphHinted is matchGlyph with a warm-path hint. If hint != 0
-// and the hint template scores ≥ hintMinScore, it returns immediately
-// without scanning the rest of the template list. This makes
-// repeated parsing of the same strip value O(1) per glyph instead
-// of O(numTemplates), which is the common case when HP/SP are stable.
-//
-// Correctness: a wrong hint (the value changed) scores well below
-// hintMinScore because glyph shapes for different digits/letters
-// differ significantly at the scale used. The full search then runs
-// and finds the correct glyph.
-func matchGlyphHinted(glyph [][]bool, templates []templateEntry, hint rune) (rune, float64) {
-	if hint != 0 {
-		gH := maskHeight(glyph)
-		gW := maskWidth(glyph)
-		if gH > 0 && gW > 0 {
-			for _, t := range templates {
-				if t.rune != hint {
-					continue
-				}
-				tH := t.bounds.Dy()
-				tW := t.bounds.Dx()
-				if tH == 0 || tW == 0 {
-					break
-				}
-				if gW*2 < tW || tW*2 < gW || gH*2 < tH || tH*2 < gH {
-					break // size ratio fails — hint not applicable
-				}
-				resized := resizeMaskNearest(glyph, gW, gH, tW, tH)
-				if score := maskEqualFraction(resized, t.mask); score >= hintMinScore {
-					return t.rune, score
-				}
-				break // hint scored below threshold — fall through
-			}
-		}
-	}
-	return matchGlyph(glyph, templates)
+	return bestRune, bestScore, bestScore - runnerUp
 }
 
 // resizeMaskNearest nearest-neighbor resizes src (gW×gH)

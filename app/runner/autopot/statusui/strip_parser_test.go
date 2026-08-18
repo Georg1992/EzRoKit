@@ -199,7 +199,7 @@ func TestFindComponents_TwoBlocksSplitByEmptyColumn(t *testing.T) {
 		{true, true, true, true},
 		{false, false, false, false},
 	}
-	comps := findComponents(mask, image.Rect(0, 0, 4, 6))
+	comps := findComponents(mask)
 	if len(comps) != 2 {
 		t.Fatalf("got %d components, want 2: %v", len(comps), comps)
 	}
@@ -223,7 +223,7 @@ func TestFindComponents_TightVerticalBBox(t *testing.T) {
 		{false, false, true, true, false, false},
 		{false, false, false, false, false, false},
 	}
-	comps := findComponents(mask, image.Rect(0, 0, 6, 6))
+	comps := findComponents(mask)
 	if len(comps) != 1 {
 		t.Fatalf("got %d, want 1", len(comps))
 	}
@@ -243,7 +243,7 @@ func TestFindComponents_MicroNoiseFiltered(t *testing.T) {
 		{true, false, false, false, true, true, true, true},
 		{false, false, false, false, true, true, true, true},
 	}
-	comps := findComponents(mask, image.Rect(0, 0, 8, 5))
+	comps := findComponents(mask)
 	if len(comps) != 1 {
 		t.Fatalf("got %d components, want 1 (after noise-filter): %v", len(comps), comps)
 	}
@@ -503,3 +503,4 @@ func TestReader_DebugArtifactsWritten(t *testing.T) {
 		}
 	}
 }
+

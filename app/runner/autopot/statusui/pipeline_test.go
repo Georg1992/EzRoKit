@@ -211,37 +211,101 @@ func TestPipeline_VisualValidation_AAAndII(t *testing.T) {
 	}
 }
 
-// BenchmarkParseStrip_Cold measures a single ParseStrip call on a fresh
-// Reader that has no previous-glyph hints — every glyph goes through the
-// full template scan.
-func BenchmarkParseStrip_Cold(b *testing.B) {
-	pipeline, err := NewPipeline(statusGlyphsDirB(b), 0.70)
+// TestReader_ReadsChangedDigitsIndependentlyPerFrame guards against reintroducing
+// a per-frame glyph cache. Two fixtures with the same glyph count but different
+// digits must both read correctly through one Reader: a cache that trusts the
+// previous frame's glyph cannot tell a digit that stayed from one that changed
+// into a similar shape, and the '8' template scores 0.95 on a real '6'.
+func TestReader_ReadsChangedDigitsIndependentlyPerFrame(t *testing.T) {
+	pipeline, err := NewPipeline(statusGlyphsDir(t), 0.70)
 	if err != nil {
-		b.Fatalf("NewPipeline: %v", err)
+		t.Fatalf("NewPipeline: %v", err)
 	}
-	src := loadPNGImageB(b, filepath.Join(statusFixturesDirB(b), "aa.png"))
-	full, err := pipeline.RecognizeScreen(src)
-	if err != nil {
-		b.Fatalf("RecognizeScreen: %v", err)
+	// aa.png reads HP751/1290 SP102/201 and zoomed1.png reads HP675/1290
+	// SP117/201 — same number of components, six digits different.
+	strips := map[string]image.Image{}
+	for _, name := range []string{"aa.png", "zoomed1.png"} {
+		rec, err := pipeline.RecognizeScreen(loadPNGImage(t, filepath.Join(statusFixturesDir(t), name)))
+		if err != nil {
+			t.Fatalf("RecognizeScreen(%s): %v", name, err)
+		}
+		strips[name] = rec.StripImage
 	}
-	strip := full.StripImage
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		// Reset hints before each call so every iteration is a cold parse.
-		pipeline.reader.mu.Lock()
-		pipeline.reader.prevGlyphs = nil
-		pipeline.reader.mu.Unlock()
-		if _, err := pipeline.ParseStrip(strip); err != nil {
-			b.Fatalf("ParseStrip: %v", err)
+	reader, err := NewReader(statusGlyphsDir(t))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	for _, order := range [][]string{{"aa.png", "zoomed1.png"}, {"zoomed1.png", "aa.png"}} {
+		for _, name := range order {
+			res := reader.Read(strips[name])
+			want := statusKnownCases()[name]
+			if !res.OK {
+				t.Fatalf("%s after %v: %s (text=%q)", name, order, res.Reason, res.Text)
+			}
+			if res.HP != want.hp || res.HPMax != want.hpMax || res.SP != want.sp || res.SPMax != want.spMax {
+				t.Fatalf("%s read after %v as HP=%d/%d SP=%d/%d, want HP=%d/%d SP=%d/%d",
+					name, order, res.HP, res.HPMax, res.SP, res.SPMax, want.hp, want.hpMax, want.sp, want.spMax)
+			}
 		}
 	}
 }
 
-// BenchmarkParseStrip_Warm measures ParseStrip when the Reader already has
-// prevGlyphs from the previous call — the common steady-state case in the
-// autopot loop where HP/SP are unchanged between frames.
-func BenchmarkParseStrip_Warm(b *testing.B) {
+// TestMatchGlyph_MarginSeparatesLookalikeDigits documents the distance the margin
+// rule has to work with: the correct template wins outright on the glyphs the game
+// renders, while the digit it resembles is only a few percent behind.
+func TestMatchGlyph_MarginSeparatesLookalikeDigits(t *testing.T) {
+	reader, err := NewReader(statusGlyphsDir(t))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	byRune := map[rune]templateEntry{}
+	for _, tpl := range reader.templates {
+		byRune[tpl.rune] = tpl
+	}
+
+	for _, digit := range []rune{'0', '3', '5', '6', '8', '9'} {
+		tpl, ok := byRune[digit]
+		if !ok {
+			t.Fatalf("no template for %c", digit)
+		}
+		ch, score, margin := matchGlyph(tpl.mask, reader.templates)
+		if ch != digit {
+			t.Fatalf("%c matched as %c", digit, ch)
+		}
+		if score != 1 {
+			t.Errorf("%c against its own template scored %.3f, want 1.000", digit, score)
+		}
+		if reason := rejectGlyph(score, 0.70, margin); reason != "" {
+			t.Errorf("%c rejected as %s with margin %.3f — the margin is too tight for real glyphs", digit, reason, margin)
+		}
+	}
+
+	// A glyph that carries the strokes of both a 6 and an 8 is closer to each
+	// than the margin allows, so it is refused instead of guessed.
+	blended := unionMask(byRune['6'].mask, byRune['8'].mask)
+	ch, score, margin := matchGlyph(blended, reader.templates)
+	if reason := rejectGlyph(score, 0.70, margin); reason != "ambiguous_glyph" {
+		t.Fatalf("6/8 blend matched %c at score %.3f margin %.3f, reason %q — want ambiguous_glyph",
+			ch, score, margin, reason)
+	}
+}
+
+func unionMask(a, b [][]bool) [][]bool {
+	out := make([][]bool, len(a))
+	for y := range a {
+		out[y] = make([]bool, len(a[y]))
+		for x := range a[y] {
+			out[y][x] = a[y][x] || (y < len(b) && x < len(b[y]) && b[y][x])
+		}
+	}
+	return out
+}
+
+// BenchmarkParseStrip measures one strip parse: every glyph against every
+// template, which is what the autopot loop pays on every read. This is the
+// number that says whether the reader can afford to have no glyph cache.
+func BenchmarkParseStrip(b *testing.B) {
 	pipeline, err := NewPipeline(statusGlyphsDirB(b), 0.70)
 	if err != nil {
 		b.Fatalf("NewPipeline: %v", err)
@@ -252,10 +316,6 @@ func BenchmarkParseStrip_Warm(b *testing.B) {
 		b.Fatalf("RecognizeScreen: %v", err)
 	}
 	strip := full.StripImage
-	// Prime the hints with one cold parse.
-	if _, err := pipeline.ParseStrip(strip); err != nil {
-		b.Fatalf("prime ParseStrip: %v", err)
-	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
