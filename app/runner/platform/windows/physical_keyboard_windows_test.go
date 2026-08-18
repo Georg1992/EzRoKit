@@ -192,6 +192,33 @@ func TestPhysicalKeyboard_UnpluggedKeyboardDropsItsHold(t *testing.T) {
 	}
 }
 
+// VIIPER's keyboard attaches long after startup, so the handle that shows up
+// then must be classified as unable to hold a bind, while a keyboard the user
+// plugs in mid-session can hold one.
+func TestPhysicalKeyboard_DeviceArrivingLater(t *testing.T) {
+	p := oneKeyboard()
+	if board, line := p.classify(0xD1F0111, viiperKbd); board != "" {
+		t.Fatalf("VIIPER arriving later became keyboard %q (%s)", board, line)
+	}
+	p.applyKey(0xD1F0111, 'E', true)
+	if keyHeld(p, 'E') {
+		t.Fatal("VIIPER arriving later held E")
+	}
+
+	second := `\\?\HID#VID_046D&PID_C31C&MI_00#7&1e2b3c4d&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}`
+	if board, _ := p.classify(0x20055, second); board != "VID_046D&PID_C31C" {
+		t.Fatalf("second keyboard arriving later got id %q", board)
+	}
+	p.applyKey(0x20055, 'W', true)
+	if !keyHeld(p, 'W') {
+		t.Fatal("keyboard plugged in mid-session cannot hold a bind")
+	}
+	p.applyKey(0x20055, 'W', false)
+	if keyHeld(p, 'W') {
+		t.Fatal("release left W held")
+	}
+}
+
 func TestIsVirtualKeyboardName(t *testing.T) {
 	if !isVirtualKeyboardName(viiperKbd) {
 		t.Fatal("VIIPER VID should be virtual")

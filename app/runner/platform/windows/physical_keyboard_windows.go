@@ -259,21 +259,20 @@ func (p *physicalKeyboard) classifyKeyboards() error {
 	if err != nil {
 		return fmt.Errorf("list physical keyboards: %w", err)
 	}
-	boards := make(map[string]bool)
-	lines := make([]string, 0, len(devices))
 	p.mu.Lock()
 	p.keyboard = make(map[uintptr]string, len(devices))
 	p.held = make(map[int32]string)
+	p.mu.Unlock()
+
+	boards := make(map[string]bool)
+	lines := make([]string, 0, len(devices))
 	for _, device := range devices {
-		name := deviceName(device)
-		board := keyboardFromName(name)
-		p.keyboard[device] = board
+		board, line := p.classify(device, deviceName(device))
 		if board != "" {
 			boards[board] = true
 		}
-		lines = append(lines, describeKeyboard(device, name, board))
+		lines = append(lines, line)
 	}
-	p.mu.Unlock()
 	KeyboardLog(fmt.Sprintf("physical keyboards: %d, from %d Raw Input handle(s)", len(boards), len(devices)))
 	for _, line := range lines {
 		KeyboardLog(line)
@@ -284,18 +283,23 @@ func (p *physicalKeyboard) classifyKeyboards() error {
 	return nil
 }
 
-// addDevice classifies a keyboard plugged in while the tool runs, including
-// VIIPER's own keyboard, which is logged as ignored.
+// addDevice classifies a keyboard plugged in while the tool runs. VIIPER's
+// keyboard attaches this way, well after startup, and is classified out here.
 func (p *physicalKeyboard) addDevice(device uintptr) {
 	if device == 0 {
 		return
 	}
-	name := deviceName(device)
+	_, line := p.classify(device, deviceName(device))
+	KeyboardLog(line)
+}
+
+// classify records what a handle is, and describes it for the log.
+func (p *physicalKeyboard) classify(device uintptr, name string) (string, string) {
 	board := keyboardFromName(name)
 	p.mu.Lock()
 	p.keyboard[device] = board
 	p.mu.Unlock()
-	KeyboardLog(describeKeyboard(device, name, board))
+	return board, describeKeyboard(device, name, board)
 }
 
 // removeDevice drops a keyboard that was unplugged. Once its last handle is gone
