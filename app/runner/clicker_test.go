@@ -520,9 +520,6 @@ func TestClicker_FailedKeyDoesNotEmitMouse(t *testing.T) {
 }
 
 func TestClicker_UsesConfiguredDelay(t *testing.T) {
-	if ClickerHold != 10*time.Millisecond {
-		t.Fatalf("clicker hold = %v, want 10ms so a 60fps game can see the down", ClickerHold)
-	}
 	if slotDelay(ClickerSlot{DelayMs: 77}) != 77*time.Millisecond {
 		t.Fatalf("slotDelay must use the configured delay")
 	}
@@ -531,9 +528,15 @@ func TestClicker_UsesConfiguredDelay(t *testing.T) {
 	}
 }
 
-func TestSharedKeyTapHoldSpansHIDPoll(t *testing.T) {
-	if timing.KeyTapHold != timing.HIDPollInterval {
-		t.Fatalf("generic key hold = %v, want one HID poll (%v)", timing.KeyTapHold, timing.HIDPollInterval)
+// Every system taps through this one hold: the clicker, key chains, timer keys
+// and autopot. One HID poll only proves the host has the down state, so the hold
+// spans two, leaving a game that samples once per 60fps frame time to see it.
+func TestSharedKeyTapHoldSpansTwoHIDPolls(t *testing.T) {
+	if timing.KeyTapHold != 2*timing.HIDPollInterval {
+		t.Fatalf("key hold = %v, want two HID polls (%v)", timing.KeyTapHold, 2*timing.HIDPollInterval)
+	}
+	if timing.KeyTapHold != 10*time.Millisecond {
+		t.Fatalf("key hold = %v, want 10ms so a 60fps game can see the down", timing.KeyTapHold)
 	}
 }
 

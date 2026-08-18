@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ezrokit/runner/internal/timing"
 )
 
 // cycleClickerSession records what the game would receive. A cycle is one call,
@@ -102,8 +104,8 @@ func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
 		}
 	}
 	for i, hold := range holds[:6] {
-		if hold != ClickerHold {
-			t.Fatalf("hold %d = %v, want %v", i, hold, ClickerHold)
+		if hold != timing.KeyTapHold {
+			t.Fatalf("hold %d = %v, want %v", i, hold, timing.KeyTapHold)
 		}
 	}
 }

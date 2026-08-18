@@ -15,8 +15,6 @@ const (
 	ClickerSlotCount   = 2
 	ClickerKeysPerBind = 8
 	DefaultDelayMs     = 50
-	// 10 ms down is long enough for a 60 fps game to see the press.
-	ClickerHold = 10 * time.Millisecond
 )
 
 // ClickerSlot is one bind row.
@@ -191,13 +189,13 @@ func (r *Runner) fireCycle(sess session.InputSession, slot ClickerSlot, vk int32
 		return nil
 	}
 	if !slot.MouseClick {
-		return sess.TapKey(vk, ClickerHold)
+		return sess.TapKey(vk, timing.KeyTapHold)
 	}
 	cycle, ok := sess.(session.ClickerInputSession)
 	if !ok {
 		return fmt.Errorf("input session cannot run a clicker cycle")
 	}
-	return cycle.TapKeyWithClick(vk, ClickerHold)
+	return cycle.TapKeyWithClick(vk, timing.KeyTapHold)
 }
 
 func slotDelay(slot ClickerSlot) time.Duration {

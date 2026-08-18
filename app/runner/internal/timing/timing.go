@@ -14,9 +14,12 @@ const (
 	PollInterval      = 10 * time.Millisecond
 	MinPollWait       = time.Millisecond
 	CaptureRetryDelay = 50 * time.Millisecond
-	// KeyTapHold is how long a key or button stays down so the host can
-	// see it before the matching up.
-	KeyTapHold       = HIDPollInterval
+	// KeyTapHold is how long a key or button stays down, for every system that
+	// taps one: the clicker, key chains, timer keys and autopot. Two HID polls,
+	// because one only guarantees the host has the down state, and a game that
+	// samples the keyboard once per frame at 60fps looks every 16ms. Anything
+	// shorter is dropped by such a game first, and a missed potion is a death.
+	KeyTapHold       = 2 * HIDPollInterval
 	KeyBindTimeout   = 5 * time.Second
 	SessionCloseWait = 10 * time.Second
 )
