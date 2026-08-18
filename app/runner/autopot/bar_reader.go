@@ -189,6 +189,15 @@ type statusUIReader struct {
 	onParsed      func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
 	log           func(string)
 	coreSettings  func() CoreConfig
+
+	// hpMax/spMax are the maxima of the last accepted read. pendingHPMax and
+	// pendingSPMax are the maxima proposed by reads that disagreed with those,
+	// and pendingMax counts how many of them agreed in a row. See acceptMaxima.
+	hpMax        int
+	spMax        int
+	pendingHPMax int
+	pendingSPMax int
+	pendingMax   int
 }
 
 func (r *statusUIReader) Name() string { return "OCR" }
@@ -225,16 +234,18 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 			return BarReadResult{Status: StatusInvalid, Err: err}
 		}
 	}
+	status, ok := r.confirmMaxima(status)
+	if !ok {
+		return BarReadResult{
+			Status: StatusNotFound,
+			Err: fmt.Errorf("statusui: maxima changed from HP/%d SP/%d to HP/%d SP/%d",
+				r.hpMax, r.spMax, status.HPMax, status.SPMax),
+		}
+	}
 	r.notifyParsed(status)
 
-	hpPct := 0.0
-	spPct := 0.0
-	if status.HPMax > 0 {
-		hpPct = float64(status.HP) * 100 / float64(status.HPMax)
-	}
-	if status.SPMax > 0 {
-		spPct = float64(status.SP) * 100 / float64(status.SPMax)
-	}
+	hpPct := float64(status.HP) * 100 / float64(status.HPMax)
+	spPct := float64(status.SP) * 100 / float64(status.SPMax)
 
 	cfg := CoreConfig{}
 	if r.coreSettings != nil {
@@ -249,11 +260,102 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 	}
 }
 
-// validate captures a full screenshot and runs panel detection.
+// maxChangeConfirm is how many reads in a row must agree on new maxima before
+// the reader adopts them.
+const maxChangeConfirm = 3
+
+// confirmMaxima settles a read whose maxima disagree with the last accepted one
+// by re-reading the strip immediately, and returns the read to act on.
+//
+// Confirming from fresh captures rather than across loop iterations is what keeps
+// both cases quick: a change that is real, from a level-up or a gear swap, repeats
+// on every capture and is adopted within a couple of milliseconds instead of
+// costing seconds of pixel-search, while a digit lost to a half-drawn frame does
+// not survive the re-read and is replaced by the good value.
+func (r *statusUIReader) confirmMaxima(status statusui.ParsedStatus) (statusui.ParsedStatus, bool) {
+	for i := 0; i < maxChangeConfirm; i++ {
+		if r.acceptMaxima(status) {
+			return status, true
+		}
+		next, err := r.captureAndParse()
+		if err != nil {
+			return status, false
+		}
+		status = next
+	}
+	return status, false
+}
+
+// acceptMaxima holds the HP/SP maxima steady so a misread digit cannot pass as a
+// reading.
+//
+// Maxima change when the character levels or swaps gear, never between two frames
+// of a fight, while a digit dropped by the parser changes them constantly: 1290
+// read as 129 leaves HP looking ten times healthier than it is, and that is a
+// potion not drunk. So a read whose maxima differ from the last accepted one is
+// refused, and new maxima are adopted only once maxChangeConfirm reads in a row
+// report the same ones.
+func (r *statusUIReader) acceptMaxima(s statusui.ParsedStatus) bool {
+	if s.HPMax <= 0 || s.SPMax <= 0 {
+		return false
+	}
+	if r.hpMax == s.HPMax && r.spMax == s.SPMax {
+		r.pendingMax = 0
+		return true
+	}
+	if r.hpMax == 0 || r.spMax == 0 {
+		r.adoptMaxima(s)
+		return true
+	}
+	if r.pendingHPMax == s.HPMax && r.pendingSPMax == s.SPMax {
+		r.pendingMax++
+	} else {
+		r.pendingHPMax, r.pendingSPMax, r.pendingMax = s.HPMax, s.SPMax, 1
+	}
+	if r.pendingMax >= maxChangeConfirm {
+		r.adoptMaxima(s)
+		return true
+	}
+	return false
+}
+
+func (r *statusUIReader) adoptMaxima(s statusui.ParsedStatus) {
+	r.hpMax, r.spMax = s.HPMax, s.SPMax
+	r.pendingHPMax, r.pendingSPMax, r.pendingMax = 0, 0, 0
+}
+
+// validate re-establishes where the status strip is.
+//
+// It first re-confirms the panel at the rect the poller already cached, which
+// costs one 218×58 crop, and only scans the whole screen when that fails or
+// nothing is cached yet. The scan is ~95ms against ~0.4ms for the crop, and it
+// runs inside the healing loop, so doing it on every revalidation would mean
+// 95ms of blindness every 5 seconds. The panel does not move on its own.
+func (r *statusUIReader) validate() error {
+	if r.confirmCachedPanel() == nil {
+		return nil
+	}
+	return r.searchForPanel()
+}
+
+// confirmCachedPanel checks the panel is still at the cached rect.
+func (r *statusUIReader) confirmCachedPanel() error {
+	panel := r.poller.PanelRect()
+	if panel.Empty() {
+		return fmt.Errorf("statusui: no cached panel")
+	}
+	crop, err := r.captureRegion(panel)
+	if err != nil {
+		return err
+	}
+	return r.poller.ConfirmPanel(crop)
+}
+
+// searchForPanel captures a full screenshot and runs panel detection.
 // Logs failures only on state transitions (panel lost / found) to
 // avoid GUI spam on repeated retries. Screen capture failures
 // are logged once then suppressed until a successful capture.
-func (r *statusUIReader) validate() error {
+func (r *statusUIReader) searchForPanel() error {
 	capture := r.capture
 	if capture == nil {
 		capture = defaultScreenCapturer()
@@ -298,18 +400,22 @@ func (r *statusUIReader) captureAndParse() (statusui.ParsedStatus, error) {
 	if strip.Empty() {
 		return statusui.ParsedStatus{}, fmt.Errorf("strip rect not yet validated")
 	}
-	capture := r.capture
-	if capture == nil {
-		capture = defaultScreenCapturer()
-	}
-	img, err := capture.CaptureScreenRegion(Rect{
-		X: strip.Min.X, Y: strip.Min.Y,
-		W: strip.Dx(), H: strip.Dy(),
-	})
+	img, err := r.captureRegion(strip)
 	if err != nil {
 		return statusui.ParsedStatus{}, err
 	}
 	return r.poller.Parse(img)
+}
+
+func (r *statusUIReader) captureRegion(rect image.Rectangle) (*image.RGBA, error) {
+	capture := r.capture
+	if capture == nil {
+		capture = defaultScreenCapturer()
+	}
+	return capture.CaptureScreenRegion(Rect{
+		X: rect.Min.X, Y: rect.Min.Y,
+		W: rect.Dx(), H: rect.Dy(),
+	})
 }
 
 func (r *statusUIReader) notifyParsed(s statusui.ParsedStatus) {

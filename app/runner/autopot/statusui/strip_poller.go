@@ -2,6 +2,7 @@ package statusui
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"sync"
 	"time"
@@ -17,9 +18,11 @@ import (
 //     No panel detection, no full-screen scan.
 //
 //  3. Revalidate — every ValidateEvery interval (default 5 s) the poller
-//     marks itself as needing reacquisition so the caller runs a full
-//     RecognizeScreen again. This catches panel drift (UI resize,
-//     resolution change, game window moved).
+//     marks itself as needing reacquisition. The caller should offer the
+//     cached panel rect to ConfirmPanel first, which is ~200× cheaper
+//     than a screen scan, and fall back to Validate when that fails —
+//     which is what catches panel drift (UI resize, resolution change,
+//     game window moved).
 //
 // Typical caller loop:
 //
@@ -102,11 +105,47 @@ func (p *StripPoller) Validate(screen image.Image) error {
 	return nil
 }
 
+// ConfirmPanel re-confirms the panel at the rect a previous Validate cached,
+// from a crop of that rect alone, and resets the revalidation timer when it still
+// looks like the status panel.
+//
+// This is the cheap half of revalidation. A full Validate scans the screen for
+// the panel, which costs ~95ms and blocks whatever loop is driving the poller; a
+// crop of a known 218×58 rect costs ~0.4ms. The panel does not move on its own,
+// so the expensive scan is only needed once this one fails.
+//
+// Returns an error if nothing is cached yet, if the crop is not the cached size,
+// or if the crop does not verify as a panel.
+func (p *StripPoller) ConfirmPanel(panel image.Image) error {
+	if p == nil {
+		return errors.New("statusui: poller is not initialized")
+	}
+	p.mu.Lock()
+	cached := p.panelRect
+	p.mu.Unlock()
+	if cached.Empty() {
+		return errors.New("statusui: no cached panel to confirm")
+	}
+	if panel == nil {
+		return errors.New("statusui: nil panel crop")
+	}
+	if b := panel.Bounds(); b.Dx() != cached.Dx() || b.Dy() != cached.Dy() {
+		return fmt.Errorf("statusui: panel crop is %dx%d, cached rect is %dx%d", b.Dx(), b.Dy(), cached.Dx(), cached.Dy())
+	}
+	if err := VerifyPanel(panel); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.lastValidate = time.Now()
+	p.mu.Unlock()
+	return nil
+}
+
 // Parse parses HP/SP values from the provided strip image. The strip
 // should be captured at StripRect. Returns the parsed values and any
-// parse error. The underlying Reader caches glyph hints from the
-// previous successful call so repeated calls with the same values are
-// significantly faster.
+// parse error. Every call reads the strip from scratch — the parser
+// keeps nothing from the previous frame, so a value that changed can
+// never be reported as the one it replaced.
 func (p *StripPoller) Parse(strip image.Image) (ParsedStatus, error) {
 	if p == nil || p.pipeline == nil {
 		return ParsedStatus{}, errors.New("statusui: poller is not initialized")
@@ -115,15 +154,17 @@ func (p *StripPoller) Parse(strip image.Image) (ParsedStatus, error) {
 	return res.ParsedStatus, err
 }
 
-// Invalidate forces NeedsValidation to return true on the next call,
-// triggering an immediate re-acquisition. Use when the game window is
-// known to have moved or the panel may have changed.
+// PanelRect returns the screen-space rectangle of the status panel as
+// determined by the last successful Validate. Zero until then.
 func (p *StripPoller) PanelRect() image.Rectangle {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.panelRect
 }
 
+// Invalidate forces NeedsValidation to return true on the next call,
+// triggering an immediate re-acquisition. Use when the game window is
+// known to have moved or the panel may have changed.
 func (p *StripPoller) Invalidate() {
 	p.mu.Lock()
 	p.lastValidate = time.Time{}
