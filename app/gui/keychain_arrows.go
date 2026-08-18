@@ -13,6 +13,7 @@ const (
 	keyChainKeyFieldWidth   = 56
 	keyChainDelayFieldWidth = 80
 	keyChainStepWidth       = keyChainDelayFieldWidth
+	keyChainHeaderHeight    = 16
 	keyChainFieldHeight     = 22
 	keyChainDownHeight      = 18
 	keyChainLinkWidth       = 20
@@ -20,15 +21,22 @@ const (
 	keyChainDelayMaxMs      = 999999
 	keyChainScrollMaxWidth  = 9999
 	// Scroll area sized for about one full switch; more switches scroll.
-	keyChainScrollMinHeight = 160
+	keyChainScrollMinHeight = 176
 	keyChainScrollMaxHeight = 260
 )
 
-var keyChainArrowColor = walk.RGB(110, 110, 110)
+var (
+	keyChainArrowColor   = walk.RGB(110, 110, 110)
+	keyChainTriggerColor = walk.RGB(46, 184, 70)
+)
 
 var (
-	keyChainSurfaceBrush walk.Brush
-	keyChainSurfaceOnce  sync.Once
+	keyChainSurfaceBrush     walk.Brush
+	keyChainSurfaceOnce      sync.Once
+	keyChainTriggerBrush     walk.Brush
+	keyChainTriggerBrushOnce sync.Once
+	keyChainTriggerFont      *walk.Font
+	keyChainTriggerFontOnce  sync.Once
 )
 
 func keyChainSurface() walk.Brush {
@@ -42,16 +50,77 @@ func applyKeyChainSurface(w walk.Window) {
 	w.SetBackground(keyChainSurface())
 }
 
+func addKeyChainStepHeader(parent walk.Container, trigger bool) error {
+	if !trigger {
+		spacer, err := walk.NewComposite(parent)
+		if err != nil {
+			return err
+		}
+		if err := spacer.SetMinMaxSize(
+			walk.Size{Width: keyChainStepWidth, Height: keyChainHeaderHeight},
+			walk.Size{Width: keyChainStepWidth, Height: keyChainHeaderHeight},
+		); err != nil {
+			return err
+		}
+		applyKeyChainSurface(spacer)
+		return nil
+	}
+
+	label, err := walk.NewLabel(parent)
+	if err != nil {
+		return err
+	}
+	if err := label.SetText("Trigger"); err != nil {
+		return err
+	}
+	if err := label.SetMinMaxSize(
+		walk.Size{Width: keyChainStepWidth, Height: keyChainHeaderHeight},
+		walk.Size{Width: keyChainStepWidth, Height: keyChainHeaderHeight},
+	); err != nil {
+		return err
+	}
+	if err := label.SetTextAlignment(walk.AlignCenter); err != nil {
+		return err
+	}
+	label.SetTextColor(keyChainTriggerColor)
+	if font := keyChainTriggerLabelFont(); font != nil {
+		label.SetFont(font)
+	}
+	applyKeyChainSurface(label)
+	return nil
+}
+
+func styleKeyChainTriggerField(edit *walk.LineEdit) {
+	edit.SetTextColor(keyChainTriggerColor)
+	edit.SetBackground(keyChainTriggerBackground())
+	_ = edit.SetToolTipText("Trigger key — tap once to run the chain, hold to loop")
+}
+
+func keyChainTriggerBackground() walk.Brush {
+	keyChainTriggerBrushOnce.Do(func() {
+		keyChainTriggerBrush, _ = walk.NewSolidColorBrush(walk.RGB(210, 242, 217))
+	})
+	return keyChainTriggerBrush
+}
+
+func keyChainTriggerLabelFont() *walk.Font {
+	keyChainTriggerFontOnce.Do(func() {
+		keyChainTriggerFont, _ = walk.NewFont("Segoe UI", 8, walk.FontBold)
+	})
+	return keyChainTriggerFont
+}
+
 func keyChainStepHeight() int {
-	return keyChainFieldHeight + keyChainDownHeight + keyChainFieldHeight
+	return keyChainHeaderHeight + keyChainFieldHeight + keyChainDownHeight + keyChainFieldHeight
 }
 
 func keyChainKeyCenterY(bounds walk.Rectangle) int {
-	return int(float64(bounds.Height) * (float64(keyChainFieldHeight) / 2.0) / float64(keyChainStepHeight()))
+	keyMid := float64(keyChainHeaderHeight) + float64(keyChainFieldHeight)/2.0
+	return int(float64(bounds.Height) * keyMid / float64(keyChainStepHeight()))
 }
 
 func keyChainDelayCenterY(bounds walk.Rectangle) int {
-	top := float64(keyChainFieldHeight + keyChainDownHeight)
+	top := float64(keyChainHeaderHeight + keyChainFieldHeight + keyChainDownHeight)
 	return int(float64(bounds.Height) * (top + float64(keyChainFieldHeight)/2.0) / float64(keyChainStepHeight()))
 }
 

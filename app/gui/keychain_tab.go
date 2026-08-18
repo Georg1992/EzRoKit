@@ -105,7 +105,7 @@ func (a *guiApp) buildKeyChainTab(page *walk.TabPage) error {
 	a.updateKeyChainAddButton()
 	a.updateKeyChainRemoveButtons()
 
-	if _, err := newHint(page, "Key 1 is the trigger for each switch. Tap it to run the chain once; hold it to loop."); err != nil {
+	if _, err := newHint(page, "The Trigger is the first key sent. Tap it for one full pass; hold to loop; release finishes the current pass."); err != nil {
 		return err
 	}
 	return nil
@@ -198,6 +198,15 @@ func (a *guiApp) buildKeyChainLabels(parent walk.Container) error {
 	}
 	applyKeyChainSurface(labelsCol)
 
+	headerSpacer, err := walk.NewComposite(labelsCol)
+	if err != nil {
+		return err
+	}
+	if err := headerSpacer.SetMinMaxSize(walk.Size{Width: keyChainLabelColWidth, Height: keyChainHeaderHeight}, walk.Size{Width: keyChainLabelColWidth, Height: keyChainHeaderHeight}); err != nil {
+		return err
+	}
+	applyKeyChainSurface(headerSpacer)
+
 	keysLabel, err := walk.NewLabel(labelsCol)
 	if err != nil {
 		return err
@@ -272,6 +281,10 @@ func (a *guiApp) buildKeyChainStep(parent walk.Container, switchIdx, slotIdx, he
 	}
 	applyKeyChainSurface(step)
 
+	if err := addKeyChainStepHeader(step, slotIdx == 0); err != nil {
+		return err
+	}
+
 	w := &a.keychain.switches[switchIdx].slots[slotIdx]
 	w.keyEdit, err = walk.NewLineEdit(step)
 	if err != nil {
@@ -282,6 +295,9 @@ func (a *guiApp) buildKeyChainStep(parent walk.Container, switchIdx, slotIdx, he
 	}
 	if err := w.keyEdit.SetMinMaxSize(walk.Size{Width: keyChainKeyFieldWidth, Height: keyChainFieldHeight}, walk.Size{Width: keyChainKeyFieldWidth, Height: keyChainFieldHeight}); err != nil {
 		return err
+	}
+	if slotIdx == 0 {
+		styleKeyChainTriggerField(w.keyEdit)
 	}
 	a.keychain.setKeyText(switchIdx, slotIdx, 0)
 	si, slot := switchIdx, slotIdx
