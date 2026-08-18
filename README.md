@@ -86,16 +86,22 @@ Status indicator: red **OFF**, green **ON**.
 
 ### Click loop
 
-While the trigger key is held, each bind repeats one of these exact flows:
+Hold the trigger to spam. Release it to stop. Same loop as a simple AHK
+script, through the virtual keyboard and mouse:
 
-- **Mouse enabled:** virtual key click (held ~20 ms) → virtual mouse click
-  (short, hardened hold) → sleep for **Delay ms**
-- **Mouse disabled:** virtual key click (held ~20 ms) → sleep for **Delay ms**
+- **Mouse enabled:** key tap → mouse click → sleep **Delay ms**
+- **Mouse disabled:** key tap → sleep **Delay ms**
 
-The Delay setting is always after the final action. Each assigned key has its
-own clicker state. If multiple binds are held, they run independently; pressing
-another key does not stop or take over an existing clicker cycle. A failed key
-write cannot produce a mouse-only click.
+A mouse click cannot happen twice in a row, and a failed key write cannot
+produce a mouse-only click. If two binds are held, the first one finishes its
+cycle (including Delay) before the next one starts.
+
+Releasing the trigger stops that bind. **End / F12** or **Stop** clear
+the hold state and stop every tool.
+
+If the VIIPER connection breaks while a key is held, the clicker stops on the
+failed action instead of retrying a dead device. Press **End/F12** or **Start**
+to rebuild the session and continue.
 
 Default delay: **50 ms**. If a game misses clicks, try **50–100 ms**.
 
@@ -106,6 +112,8 @@ Default delay: **50 ms**. If a game misses clicks, try **50–100 ms**.
 | Setup required on Start | Run `Install.cmd`, reboot if prompted |
 | Clicks not registered | Start clicker before the game; increase delay |
 | Loop never triggers | Check physical trigger key works |
+| Clicker keeps going after key release | Press End/F12 or Stop; rebuild if it happens again |
+| Clicker stops itself mid-spam | VIIPER input failed — press End/F12 or Start to rebuild the session |
 
 ## Source map
 

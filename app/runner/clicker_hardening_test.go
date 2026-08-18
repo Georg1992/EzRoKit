@@ -20,18 +20,12 @@ func (s *orderedClickerSession) TapKey(vk int32, hold time.Duration) error {
 	_ = vk
 	return nil
 }
-func (s *orderedClickerSession) MouseClick(hold time.Duration) error {
-	s.mu.Lock()
-	s.events = append(s.events, "mouse")
-	s.holds = append(s.holds, hold)
-	s.mu.Unlock()
-	return nil
-}
-func (s *orderedClickerSession) TapKeyThenMouseClick(_ int32, keyHold, mouseHold time.Duration) error {
+func (s *orderedClickerSession) Reset() {}
+func (s *orderedClickerSession) KeyDownThenMouseClick(_ int32, afterKey, afterMouse time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, "key", "mouse")
-	s.holds = append(s.holds, keyHold, mouseHold)
+	s.holds = append(s.holds, afterKey, afterMouse)
 	return nil
 }
 func (s *orderedClickerSession) snapshot() ([]string, []time.Duration) {
@@ -84,12 +78,8 @@ func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
 		}
 	}
 	for i, hold := range holds[:6] {
-		want := ClickerKeyTapHold
-		if i%2 == 1 {
-			want = ClickerClickHold
-		}
-		if hold != want {
-			t.Fatalf("hold %d = %v, want %v", i, hold, want)
+		if hold != ClickerHold {
+			t.Fatalf("hold %d = %v, want %v", i, hold, ClickerHold)
 		}
 	}
 }
@@ -107,14 +97,9 @@ func (s *concurrentOrderSession) TapKey(_ int32, _ time.Duration) error {
 	return nil
 }
 
-func (s *concurrentOrderSession) MouseClick(_ time.Duration) error {
-	s.mu.Lock()
-	s.events = append(s.events, "mouse")
-	s.mu.Unlock()
-	return nil
-}
+func (s *concurrentOrderSession) Reset() {}
 
-func (s *concurrentOrderSession) TapKeyThenMouseClick(_ int32, _, _ time.Duration) error {
+func (s *concurrentOrderSession) KeyDownThenMouseClick(_ int32, _, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.atomicCycles++

@@ -248,9 +248,6 @@ func (a *guiApp) startBackgroundMonitors() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := runner.StartPhysicalKeyboard(ctx); err != nil {
-		a.appendLog(fmt.Sprintf("Physical keyboard tracking failed: %v", err))
-	}
 	a.viiperMonitor = startViiperMonitor(ctx, func(active bool) {
 		a.mainWindow.Synchronize(func() {
 			if active {

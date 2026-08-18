@@ -14,9 +14,7 @@ var (
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 )
 
-// AsyncKeyDown reads the Windows desktop keyboard state. It is used only for
-// the emergency toggle keys; clicker triggers remain Raw Input-only so
-// VIIPER's virtual keyboard cannot affect them.
+// AsyncKeyDown is GetAsyncKeyState. Binds, End, and F12 all use this.
 func AsyncKeyDown(vk int32) bool {
 	ret, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
 	return ret&0x8000 != 0

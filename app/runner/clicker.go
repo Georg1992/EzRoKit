@@ -1,7 +1,3 @@
-// Package runner's clicker runner: while a physical key is held, emit
-// a key tap followed by an optional mouse click. Its lifecycle is driven by
-// internal/lifecycle; timing uses internal/timing; the session interface
-// is internal/session.InputSession.
 package runner
 
 import (
@@ -19,47 +15,30 @@ const (
 	ClickerSlotCount   = 2
 	ClickerKeysPerBind = 8
 	DefaultDelayMs     = 50
-
-	// ClickerKeyTapHold is long enough to cross several HID polls, ensuring
-	// the key-down report reaches the game before the key-up report.
-	ClickerKeyTapHold = 4 * timing.HIDPollInterval
-
-	// ClickerClickHold is the shortest hardened mouse hold: two HID polls
-	// ensure the mouse-down report is transmitted before mouse-up.
-	ClickerClickHold = 2 * timing.HIDPollInterval
-
-	clickerTriggerCount = ClickerSlotCount * ClickerKeysPerBind
+	// 10 ms down is long enough for a 60 fps game to see the press.
+	ClickerHold = 10 * time.Millisecond
 )
 
-// ClickerSlot is one bind row. Every non-zero trigger key has its own
-// clicker state and repeat deadline. Held trigger keys are independent:
-// pressing another key does not take ownership or stop an existing cycle.
+// ClickerSlot is one bind row.
 //
-//	MouseClick=true:  key click -> mouse click -> DelayMs sleep
-//	MouseClick=false: key click -> DelayMs sleep
-//
-// DelayMs is always after the final action. A key release during a cycle does
-// not interrupt that cycle.
+//	MouseClick=true:  key down -> mouse click -> key up -> DelayMs
+//	MouseClick=false: key down -> key up -> DelayMs
 type ClickerSlot struct {
 	TriggerVKs [ClickerKeysPerBind]int32
 	DelayMs    int
 	MouseClick bool
 }
 
-// Config holds every mutable thing the clicker loop needs.
 type Config struct {
 	Session session.InputSession
 	Log     func(string)
 	Slots   [ClickerSlotCount]ClickerSlot
 }
 
-// Runner watches trigger keys and emits clicks.
 type Runner struct {
 	lc *lifecycle.Lifecycle[Config]
 }
 
-// New constructs a Runner backed by a Lifecycle. The Log callback is
-// defaulted to a no-op so callers don't have to provide one.
 func New(cfg Config) *Runner {
 	if cfg.Log == nil {
 		cfg.Log = func(string) {}
@@ -78,10 +57,8 @@ func New(cfg Config) *Runner {
 	return r
 }
 
-// Running reports whether the clicker loop is currently active.
 func (r *Runner) Running() bool { return r.lc.Running() }
 
-// UpdateSettings replaces the live slots while preserving Session and Log.
 func (r *Runner) UpdateSettings(slots [ClickerSlotCount]ClickerSlot) {
 	cfg := r.lc.Settings()
 	cfg.Slots = slots
@@ -90,7 +67,6 @@ func (r *Runner) UpdateSettings(slots [ClickerSlotCount]ClickerSlot) {
 
 func (r *Runner) settings() Config { return r.lc.Settings() }
 
-// Start launches the clicker loop.
 func (r *Runner) Start() error {
 	if err := r.lc.Start(r.run); err != nil {
 		return fmt.Errorf("clicker: %w", err)
@@ -98,13 +74,10 @@ func (r *Runner) Start() error {
 	return nil
 }
 
-// Stop signals the clicker loop to exit.
 func (r *Runner) Stop() { r.lc.Stop() }
 
-// Wait blocks until the clicker goroutine has exited.
 func (r *Runner) Wait() { r.lc.Wait() }
 
-// KeysText formats bind trigger keys for UI labels.
 func KeysText(vks [ClickerKeysPerBind]int32) string {
 	names := make([]string, 0, ClickerKeysPerBind)
 	for _, vk := range vks {
@@ -118,88 +91,74 @@ func KeysText(vks [ClickerKeysPerBind]int32) string {
 	return strings.Join(names, ", ")
 }
 
-type clickerKeyState struct {
-	vk      int32
-	down    bool
-	nextDue time.Time
-}
-
-// run keeps one bounded synchronous loop. Trigger release is checked between
-// cycles and a release during a cycle prevents the next cycle. There are no
-// per-cycle goroutines to leak or outlive the runner.
 func (r *Runner) run(ctx context.Context, _ Config) {
-	var states [clickerTriggerCount]clickerKeyState
-
+	defer r.settings().Session.Reset()
+	armed := false
 	for ctx.Err() == nil {
-		// End/F12 are an emergency stop independent of the GUI callback.
-		// This prevents a runaway clicker from depending on a responsive
-		// window message loop to terminate.
-		for _, vk := range timing.ToggleVKs {
-			if EmergencyKeyDown(vk) {
-				return
-			}
+		if emergencyDown() {
+			return
 		}
 
 		current := r.settings()
-		now := time.Now()
-		anyMapped := false
-		nextWake := time.Time{}
-
-		for i := range states {
-			bi := i / ClickerKeysPerBind
-			ki := i % ClickerKeysPerBind
-			vk := current.Slots[bi].TriggerVKs[ki]
-			state := &states[i]
-
-			if vk != state.vk {
-				*state = clickerKeyState{vk: vk}
+		vk, slot, ok := firstHeldTrigger(current)
+		if !ok {
+			if armed {
+				current.Session.Reset()
+				armed = false
 			}
-			if vk == 0 {
-				continue
-			}
-			anyMapped = true
-
-			down := PhysicalKeyDown(vk)
-			if down {
-				if !state.down {
-					state.down = true
-					state.nextDue = now
-				}
-			} else if state.down {
-				// A physical release stops this trigger immediately. A cycle
-				// already in progress is allowed to finish its current action.
-				state.down = false
-				state.nextDue = time.Time{}
-			}
-			if !state.down {
-				continue
-			}
-
-			if state.nextDue.IsZero() || !now.Before(state.nextDue) {
-				slot := current.Slots[bi]
-				if r.fireCycle(ctx, current.Session, current.Log, slot, vk) {
-					return
-				}
-				state.nextDue = time.Now().Add(slotDelay(slot))
-			}
-
-			if nextWake.IsZero() || state.nextDue.Before(nextWake) {
-				nextWake = state.nextDue
-			}
-		}
-
-		if !anyMapped {
-			timing.Sleep(ctx, timing.CaptureRetryDelay)
-			continue
-		}
-		if nextWake.IsZero() {
 			timing.Sleep(ctx, timing.PollInterval)
 			continue
 		}
-		wait := time.Until(nextWake)
-		if wait < timing.MinPollWait {
-			wait = timing.MinPollWait
+
+		if err := r.fireCycle(current.Session, slot, vk); err != nil {
+			current.Log(fmt.Sprintf("clicker stopped: %v", err))
+			return
 		}
+		armed = true
+		if ctx.Err() != nil || emergencyDown() {
+			return
+		}
+		if !PhysicalKeyDown(vk) {
+			current.Session.Reset()
+			armed = false
+			continue
+		}
+		sleepCycleDelay(ctx, slotDelay(slot), vk)
+		if ctx.Err() != nil || emergencyDown() || !PhysicalKeyDown(vk) {
+			current.Session.Reset()
+			armed = false
+		}
+	}
+}
+
+func firstHeldTrigger(current Config) (int32, ClickerSlot, bool) {
+	for bi := range current.Slots {
+		slot := current.Slots[bi]
+		for _, vk := range slot.TriggerVKs {
+			if vk != 0 && PhysicalKeyDown(vk) {
+				return vk, slot, true
+			}
+		}
+	}
+	return 0, ClickerSlot{}, false
+}
+
+func emergencyDown() bool {
+	for _, vk := range timing.ToggleVKs {
+		if EmergencyKeyDown(vk) {
+			return true
+		}
+	}
+	return false
+}
+
+func sleepCycleDelay(ctx context.Context, d time.Duration, vk int32) {
+	deadline := time.Now().Add(d)
+	for ctx.Err() == nil && time.Now().Before(deadline) {
+		if emergencyDown() || !PhysicalKeyDown(vk) {
+			return
+		}
+		wait := time.Until(deadline)
 		if wait > timing.PollInterval {
 			wait = timing.PollInterval
 		}
@@ -207,41 +166,15 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 	}
 }
 
-// fireCycle emits one complete clicker cycle. When mouse clicking is
-// enabled, an OrderedInputSession keeps the key tap and mouse click adjacent
-// even while another runner is sending input.
-// It returns true when cancellation was observed and the runner should stop.
-func (r *Runner) fireCycle(ctx context.Context, sess session.InputSession, log func(string), slot ClickerSlot, vk int32) bool {
-	if ordered, ok := sess.(session.OrderedInputSession); ok && slot.MouseClick {
-		if err := ordered.TapKeyThenMouseClick(vk, ClickerKeyTapHold, ClickerClickHold); err != nil {
-			if ctx.Err() != nil {
-				return true
-			}
-			log(fmt.Sprintf("clicker key/mouse cycle for %s failed: %v", KeyName(vk), err))
-		}
-		return ctx.Err() != nil
-	}
-
-	if err := sess.TapKey(vk, ClickerKeyTapHold); err != nil {
-		if ctx.Err() != nil {
-			return true
-		}
-		log(fmt.Sprintf("clicker key %s failed: %v", KeyName(vk), err))
-		return false
-	}
+func (r *Runner) fireCycle(sess session.InputSession, slot ClickerSlot, vk int32) error {
 	if !slot.MouseClick {
-		return ctx.Err() != nil
+		return sess.TapKey(vk, ClickerHold)
 	}
-
-	// Once a key tap has started, complete the mouse half of the cycle even
-	// if cancellation was requested. This preserves the key -> mouse pair.
-	if err := sess.MouseClick(ClickerClickHold); err != nil {
-		if ctx.Err() != nil {
-			return true
-		}
-		log(fmt.Sprintf("clicker mouse click failed: %v", err))
+	ordered, ok := sess.(session.OrderedInputSession)
+	if !ok {
+		return fmt.Errorf("input session does not support ordered key+mouse cycles")
 	}
-	return ctx.Err() != nil
+	return ordered.KeyDownThenMouseClick(vk, ClickerHold, ClickerHold)
 }
 
 func slotDelay(slot ClickerSlot) time.Duration {

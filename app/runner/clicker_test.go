@@ -16,9 +16,10 @@ type clickerEvent struct {
 }
 
 type clickerTestSession struct {
-	mu       sync.Mutex
-	events   []clickerEvent
-	failKeys bool
+	mu         sync.Mutex
+	events     []clickerEvent
+	failKeys   bool
+	resetCount int
 }
 
 func (s *clickerTestSession) TapKey(vk int32, _ time.Duration) error {
@@ -30,13 +31,12 @@ func (s *clickerTestSession) TapKey(vk int32, _ time.Duration) error {
 	s.events = append(s.events, clickerEvent{kind: "key", vk: vk, at: time.Now()})
 	return nil
 }
-func (s *clickerTestSession) MouseClick(_ time.Duration) error {
+func (s *clickerTestSession) Reset() {
 	s.mu.Lock()
-	s.events = append(s.events, clickerEvent{kind: "mouse", at: time.Now()})
+	s.resetCount++
 	s.mu.Unlock()
-	return nil
 }
-func (s *clickerTestSession) TapKeyThenMouseClick(vk int32, _, _ time.Duration) error {
+func (s *clickerTestSession) KeyDownThenMouseClick(vk int32, _, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failKeys {
@@ -53,6 +53,11 @@ func (s *clickerTestSession) snapshot() []clickerEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]clickerEvent(nil), s.events...)
+}
+func (s *clickerTestSession) resets() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resetCount
 }
 
 func TestClicker_AlwaysEmitsKeyThenMouse(t *testing.T) {
@@ -105,7 +110,62 @@ func TestClicker_AlwaysEmitsKeyThenMouse(t *testing.T) {
 	}
 }
 
-func TestClicker_HeldKeysRunIndependently(t *testing.T) {
+func TestClicker_ReleaseSendsKeyUp(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+
+	var mu sync.Mutex
+	held := true
+	PhysicalKeyDown = func(vk int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return held && vk == 'D'
+	}
+
+	sess := &clickerTestSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		r.Stop()
+		r.Wait()
+	}()
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) && len(sess.snapshot()) < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	if len(sess.snapshot()) < 2 {
+		t.Fatal("clicker never fired while held")
+	}
+
+	mu.Lock()
+	held = false
+	mu.Unlock()
+
+	deadline = time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) && sess.resets() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if sess.resets() == 0 {
+		t.Fatal("release did not send key-up")
+	}
+
+	n := len(sess.snapshot())
+	time.Sleep(40 * time.Millisecond)
+	if got := len(sess.snapshot()); got != n {
+		t.Fatalf("spam continued after release: %d events then %d", n, got)
+	}
+}
+
+func TestClicker_SecondBindWaitsForFirstCycle(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 
@@ -140,12 +200,9 @@ func TestClicker_HeldKeysRunIndependently(t *testing.T) {
 	mu.Unlock()
 
 	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
-	waitForKeyEvent(t, sess, 'T', 200*time.Millisecond)
-
-	// T must be allowed through without waiting for D to be released.
 	time.Sleep(40 * time.Millisecond)
-	if events := sess.snapshot(); countKeyEvents(events, 'T') == 0 {
-		t.Fatalf("T did not run while D was still held: %v", events)
+	if events := sess.snapshot(); countKeyEvents(events, 'T') != 0 {
+		t.Fatalf("T ran during D's delay: %v", events)
 	}
 }
 
@@ -211,7 +268,7 @@ func countKeyEvents(events []clickerEvent, vk int32) int {
 	return n
 }
 
-func TestClicker_IndependentMousePairsStayIntact(t *testing.T) {
+func TestClicker_NeverEmitsTwoMiceInARow(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 
@@ -227,7 +284,7 @@ func TestClicker_IndependentMousePairsStayIntact(t *testing.T) {
 	r := New(Config{
 		Session: sess,
 		Slots: [ClickerSlotCount]ClickerSlot{
-			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1000, MouseClick: true},
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: true},
 		},
 		Log: func(string) {},
@@ -244,13 +301,22 @@ func TestClicker_IndependentMousePairsStayIntact(t *testing.T) {
 	held['D'] = true
 	held['T'] = true
 	mu.Unlock()
-	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
-	waitForKeyEvent(t, sess, 'T', 200*time.Millisecond)
 
-	events := sess.snapshot()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	var events []clickerEvent
+	for time.Now().Before(deadline) {
+		events = sess.snapshot()
+		if len(events) >= 8 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(events) < 4 {
+		t.Fatalf("expected several cycles, got %v", events)
+	}
 	for i, event := range events {
 		if event.kind == "mouse" && (i == 0 || events[i-1].kind != "key") {
-			t.Fatalf("mouse was not immediately paired with a key: %v", events)
+			t.Fatalf("mouse was not immediately preceded by a key: %v", events)
 		}
 	}
 }
@@ -380,20 +446,24 @@ func TestClicker_FailedKeyDoesNotEmitMouse(t *testing.T) {
 	if err := r.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	time.Sleep(30 * time.Millisecond)
-	r.Stop()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for r.Running() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if r.Running() {
+		r.Stop()
+		r.Wait()
+		t.Fatal("clicker kept retrying after a failed key")
+	}
 	r.Wait()
 	if events := sess.snapshot(); len(events) != 0 {
 		t.Fatalf("failed key emitted events: %v", events)
 	}
 }
 
-func TestClicker_UsesHardenedHoldDurations(t *testing.T) {
-	if ClickerKeyTapHold <= 4*time.Millisecond {
-		t.Fatalf("key hold %v is too short for HID visibility", ClickerKeyTapHold)
-	}
-	if ClickerClickHold < 2*5*time.Millisecond {
-		t.Fatalf("mouse hold %v is too short for HID visibility", ClickerClickHold)
+func TestClicker_UsesConfiguredDelay(t *testing.T) {
+	if ClickerHold != 10*time.Millisecond {
+		t.Fatalf("clicker hold = %v, want 10ms so a 60fps game can see the down", ClickerHold)
 	}
 	if slotDelay(ClickerSlot{DelayMs: 77}) != 77*time.Millisecond {
 		t.Fatalf("slotDelay must use the configured delay")
@@ -404,11 +474,8 @@ func TestClicker_UsesHardenedHoldDurations(t *testing.T) {
 }
 
 func TestSharedKeyTapHoldSpansHIDPoll(t *testing.T) {
-	if timing.KeyTapHold <= timing.HIDPollInterval {
-		t.Fatalf("generic key hold %v must be longer than HID poll %v", timing.KeyTapHold, timing.HIDPollInterval)
-	}
-	if timing.KeyTapHold != 2*timing.HIDPollInterval {
-		t.Fatalf("generic key hold = %v, want two HID polls (%v)", timing.KeyTapHold, 2*timing.HIDPollInterval)
+	if timing.KeyTapHold != timing.HIDPollInterval {
+		t.Fatalf("generic key hold = %v, want one HID poll (%v)", timing.KeyTapHold, timing.HIDPollInterval)
 	}
 }
 
@@ -418,5 +485,51 @@ func TestKeysText(t *testing.T) {
 	}
 	if got := KeysText([ClickerKeysPerBind]int32{'D', 'T'}); got != "D, T" {
 		t.Fatalf("two keys: got %q", got)
+	}
+}
+
+func TestVKToHID_CoversEveryBindableKey(t *testing.T) {
+	for vk, name := range keyNames {
+		if _, ok := VKToHID(vk); !ok {
+			t.Errorf("bindable key %s (VK 0x%02X) has no HID mapping", name, vk)
+		}
+	}
+}
+
+type splitOnlySession struct {
+	keys int
+}
+
+func (s *splitOnlySession) TapKey(int32, time.Duration) error { s.keys++; return nil }
+func (s *splitOnlySession) Reset()                            {}
+
+func TestClicker_MouseClickRequiresOrderedSession(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+	PhysicalKeyDown = func(int32) bool { return true }
+
+	sess := &splitOnlySession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for r.Running() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if r.Running() {
+		r.Stop()
+		r.Wait()
+		t.Fatal("clicker kept running without an ordered session")
+	}
+	r.Wait()
+	if sess.keys != 0 {
+		t.Fatalf("unordered path sent input: keys=%d", sess.keys)
 	}
 }

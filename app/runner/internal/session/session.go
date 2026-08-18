@@ -12,14 +12,15 @@ type InputSession interface {
 	// TapKey performs one complete key-down → hold → key-up action. The
 	// implementation must serialize the whole action against other input.
 	TapKey(vk int32, hold time.Duration) error
-	// MouseClick performs an atomic mouse down+up with the given hold.
-	MouseClick(hold time.Duration) error
+	// Reset sends key-up and mouse-up so a leftover HID down report cannot
+	// keep the bind held after the runner stops.
+	Reset()
 }
 
-// OrderedInputSession can execute a clicker cycle as one serialized action.
-// Implementations must not allow another input action between the key tap and
-// mouse click.
+// OrderedInputSession can execute a clicker cycle as one serialized action:
+// key down, mouse click, key up. The virtual key must come up every cycle
+// so Windows can see a physical release.
 type OrderedInputSession interface {
 	InputSession
-	TapKeyThenMouseClick(vk int32, keyHold, mouseHold time.Duration) error
+	KeyDownThenMouseClick(vk int32, afterKey, afterMouse time.Duration) error
 }

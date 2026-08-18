@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"ezrokit/runner/internal/timing"
 
@@ -18,15 +19,12 @@ type ViiperSession struct {
 	busID      uint32
 	createdBus bool
 
-	// actionMu serializes logical input actions. In particular, a clicker's
-	// key tap and mouse click must remain one ordered operation even when
-	// another runner is trying to send a key at the same time.
+	// actionMu serializes every HID action so a clicker key+mouse cycle
+	// cannot be interleaved with AutoPot or KeyChain.
 	stateMu  sync.RWMutex
 	actionMu sync.Mutex
 	closed   bool
 
-	keyMu       sync.Mutex
-	mouseMu     sync.Mutex
 	keyStream   *viiperclient.DeviceStream
 	mouseStream *viiperclient.DeviceStream
 
@@ -101,10 +99,9 @@ var errViiperSessionClosed = errors.New("viiper session is closed")
 
 func (s *ViiperSession) Close() {
 	s.closeOnce.Do(func() {
-		// Hold the closed state before taking either device lock. Input
-		// methods hold the read lock while acquiring their device lock,
-		// so no new write can slip between this transition and stream
-		// closure, even when Close races with a queued TapKey/MouseClick.
+		// Mark closed before waiting for the in-flight action. Input
+		// methods hold the read lock until they finish, so no write can
+		// start after Close has closed the streams.
 		s.stateMu.Lock()
 		s.closed = true
 		s.stateMu.Unlock()
@@ -113,12 +110,11 @@ func (s *ViiperSession) Close() {
 		defer cancel()
 
 		s.actionMu.Lock()
-		s.keyMu.Lock()
+		deadline := time.Now().Add(inputWriteTimeout)
+		_ = s.keyStream.SetWriteDeadline(deadline)
+		_ = s.mouseStream.SetWriteDeadline(deadline)
 		_ = keyUpLocked(s.keyStream)
-		s.keyMu.Unlock()
-		s.mouseMu.Lock()
 		_ = mouseUpLocked(s.mouseStream)
-		s.mouseMu.Unlock()
 		s.actionMu.Unlock()
 
 		_ = s.keyStream.Close()

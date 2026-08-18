@@ -113,7 +113,6 @@ func (k *KeyChainRunner) run(ctx context.Context, _ KeyChainConfig) {
 			continue
 		}
 
-		anyHeld := false
 		for i, sw := range current.Switches {
 			if !sw.Active() {
 				continue
@@ -122,25 +121,25 @@ func (k *KeyChainRunner) run(ctx context.Context, _ KeyChainConfig) {
 			if !PhysicalKeyDown(trigger) {
 				continue
 			}
-			anyHeld = true
 			if err := k.executeChain(ctx, current.Session, sw); err != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				current.Log(fmt.Sprintf("KeyChain switch %d failed: %v", i+1, err))
-				timing.Sleep(ctx, timing.PollInterval)
 			}
 		}
-		if !anyHeld {
-			timing.Sleep(ctx, timing.PollInterval)
-		}
+		timing.Sleep(ctx, timing.PollInterval)
 	}
 }
 
 func (k *KeyChainRunner) executeChain(ctx context.Context, sess session.InputSession, sw KeyChainSwitch) error {
-	for i := 0; i < KeyChainSlotCount; i++ {
+	trigger := sw.Keys[0]
+	for i := 1; i < KeyChainSlotCount; i++ {
 		if sw.Keys[i] == 0 {
 			continue
+		}
+		if !PhysicalKeyDown(trigger) {
+			return nil
 		}
 		if err := sess.TapKey(sw.Keys[i], timing.KeyTapHold); err != nil {
 			return err

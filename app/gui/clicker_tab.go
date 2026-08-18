@@ -156,7 +156,7 @@ func (a *guiApp) buildClickerTab(page *walk.TabPage) error {
 	a.updateClickerAddButton()
 	a.updateClickerRemoveButtons()
 
-	if _, err := newHint(configGB, "Up to 2 binds. Enable Mouse for key → mouse → sleep, or disable it for key-only spamming. Held binds run independently; End or F12 toggles start/stop."); err != nil {
+	if _, err := newHint(configGB, "Hold a bind to spam. Release that bind to stop it. End or F12 always stops."); err != nil {
 		return err
 	}
 

@@ -1,40 +1,78 @@
 package runner
 
 import (
+	"encoding"
 	"fmt"
 	"time"
 
-	"ezrokit/runner/internal/timing"
+	"ezrokit/runner/internal/session"
 
 	"github.com/Alia5/VIIPER/device/keyboard"
 	"github.com/Alia5/VIIPER/device/mouse"
 	"github.com/Alia5/VIIPER/viiperclient"
 )
 
-// Reset releases all keys and mouse buttons without closing streams, removing
-// devices, or removing the bus. The session stays reusable after a Stop.
+var (
+	_ session.InputSession        = (*ViiperSession)(nil)
+	_ session.OrderedInputSession = (*ViiperSession)(nil)
+)
+
+const inputWriteTimeout = 500 * time.Millisecond
+
 func (s *ViiperSession) Reset() {
-	s.stateMu.RLock()
-	defer s.stateMu.RUnlock()
-	if s.closed {
-		return
-	}
-	s.actionMu.Lock()
-	defer s.actionMu.Unlock()
-	s.keyMu.Lock()
-	_ = keyUpLocked(s.keyStream)
-	s.keyMu.Unlock()
-	s.mouseMu.Lock()
-	_ = mouseUpLocked(s.mouseStream)
-	s.mouseMu.Unlock()
+	_ = s.do(func() error {
+		_ = keyUpLocked(s.keyStream)
+		_ = mouseUpLocked(s.mouseStream)
+		return nil
+	})
 }
 
 func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
-	// Keep the read lock until the action lock is acquired. Close takes
-	// the write lock first, then waits for the in-flight device operation;
-	// this prevents a pre-close caller from starting a write after Close
-	// has already closed the stream. actionMu covers the complete
-	// key-down → hold → key-up action, so other runners cannot interrupt it.
+	return s.do(func() error {
+		if err := keyDownLocked(s.keyStream, vk); err != nil {
+			_ = keyUpLocked(s.keyStream)
+			return err
+		}
+		if hold > 0 {
+			time.Sleep(hold)
+		}
+		return keyUpLocked(s.keyStream)
+	})
+}
+
+// KeyDownThenMouseClick: key down, mouse click, key up. Each HID write
+// returns only after that device's USB host has polled the new state.
+// afterKey/afterMouse are extra game settle time after that poll.
+// A mouse click is never sent if the key write fails.
+func (s *ViiperSession) KeyDownThenMouseClick(vk int32, afterKey, afterMouse time.Duration) error {
+	return s.do(func() error {
+		if err := keyDownLocked(s.keyStream, vk); err != nil {
+			_ = keyUpLocked(s.keyStream)
+			_ = mouseUpLocked(s.mouseStream)
+			return err
+		}
+		if afterKey > 0 {
+			time.Sleep(afterKey)
+		}
+		var mouseErr error
+		if err := mouseDownLocked(s.mouseStream); err != nil {
+			_ = mouseUpLocked(s.mouseStream)
+			mouseErr = err
+		} else {
+			if afterMouse > 0 {
+				time.Sleep(afterMouse)
+			}
+			mouseErr = mouseUpLocked(s.mouseStream)
+		}
+		keyErr := keyUpLocked(s.keyStream)
+		if mouseErr != nil {
+			return mouseErr
+		}
+		return keyErr
+	})
+}
+
+func (s *ViiperSession) do(fn func() error) error {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	if s.closed {
@@ -42,75 +80,25 @@ func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
 	}
 	s.actionMu.Lock()
 	defer s.actionMu.Unlock()
-	return s.tapKeyLocked(vk, hold)
+
+	defer func() {
+		_ = s.keyStream.SetWriteDeadline(time.Time{})
+		_ = s.mouseStream.SetWriteDeadline(time.Time{})
+		_ = s.keyStream.SetReadDeadline(time.Time{})
+		_ = s.mouseStream.SetReadDeadline(time.Time{})
+	}()
+	return fn()
 }
 
-// TapKeyThenMouseClick performs the clicker's key and mouse actions as one
-// serialized operation. No other runner can insert input between them.
-func (s *ViiperSession) TapKeyThenMouseClick(vk int32, keyHold, mouseHold time.Duration) error {
-	s.stateMu.RLock()
-	defer s.stateMu.RUnlock()
-	if s.closed {
-		return errViiperSessionClosed
+func writeWait(stream *viiperclient.DeviceStream, v encoding.BinaryMarshaler) error {
+	deadline := time.Now().Add(inputWriteTimeout)
+	if err := stream.SetWriteDeadline(deadline); err != nil {
+		return fmt.Errorf("set input write deadline: %w", err)
 	}
-	s.actionMu.Lock()
-	defer s.actionMu.Unlock()
-
-	if err := s.tapKeyLocked(vk, keyHold); err != nil {
-		return err
+	if err := stream.SetReadDeadline(deadline); err != nil {
+		return fmt.Errorf("set input read deadline: %w", err)
 	}
-	return s.mouseClickLocked(mouseHold)
-}
-
-func (s *ViiperSession) tapKeyLocked(vk int32, hold time.Duration) error {
-	s.keyMu.Lock()
-	defer s.keyMu.Unlock()
-	if err := keyDownLocked(s.keyStream, vk); err != nil {
-		return err
-	}
-	time.Sleep(hold)
-	return keyUpLocked(s.keyStream)
-}
-
-func (s *ViiperSession) MouseClick(hold time.Duration) error {
-	s.stateMu.RLock()
-	defer s.stateMu.RUnlock()
-	if s.closed {
-		return errViiperSessionClosed
-	}
-	s.actionMu.Lock()
-	defer s.actionMu.Unlock()
-	return s.mouseClickLocked(hold)
-}
-
-func (s *ViiperSession) mouseClickLocked(hold time.Duration) error {
-	s.mouseMu.Lock()
-	defer s.mouseMu.Unlock()
-	return mouseClickLocked(s.mouseStream, hold)
-}
-
-// mouseClickLocked sends the button-down state twice before releasing it.
-// VIIPER's mouse device coalesces pending states in a one-entry channel;
-// retransmitting the identical down state ensures the pressed state spans
-// multiple HID polling opportunities without creating a second click.
-func mouseClickLocked(stream *viiperclient.DeviceStream, hold time.Duration) error {
-	if err := mouseDownLocked(stream); err != nil {
-		return err
-	}
-
-	minimumHold := 2 * timing.HIDPollInterval
-	if hold < minimumHold {
-		hold = minimumHold
-	}
-	firstHalf := hold / 2
-	time.Sleep(firstHalf)
-
-	if err := mouseDownLocked(stream); err != nil {
-		_ = mouseUpLocked(stream)
-		return err
-	}
-	time.Sleep(hold - firstHalf)
-	return mouseUpLocked(stream)
+	return stream.WriteBinaryWait(v)
 }
 
 func keyDownLocked(stream *viiperclient.DeviceStream, vk int32) error {
@@ -119,18 +107,18 @@ func keyDownLocked(stream *viiperclient.DeviceStream, vk int32) error {
 		return fmt.Errorf("unsupported trigger key %s", KeyName(vk))
 	}
 	press := keyboard.PressKey(hid)
-	return stream.WriteBinary(&press)
+	return writeWait(stream, &press)
 }
 
 func keyUpLocked(stream *viiperclient.DeviceStream) error {
 	release := keyboard.Release()
-	return stream.WriteBinary(&release)
+	return writeWait(stream, &release)
 }
 
 func mouseDownLocked(stream *viiperclient.DeviceStream) error {
-	return stream.WriteBinary(&mouse.InputState{Buttons: mouse.BtnLeft})
+	return writeWait(stream, &mouse.InputState{Buttons: mouse.BtnLeft})
 }
 
 func mouseUpLocked(stream *viiperclient.DeviceStream) error {
-	return stream.WriteBinary(&mouse.InputState{})
+	return writeWait(stream, &mouse.InputState{})
 }

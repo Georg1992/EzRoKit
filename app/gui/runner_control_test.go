@@ -46,7 +46,7 @@ func testSession() runner.InputSession { return testInputSession{} }
 type testInputSession struct{}
 
 func (testInputSession) TapKey(int32, time.Duration) error { return nil }
-func (testInputSession) MouseClick(time.Duration) error     { return nil }
+func (testInputSession) Reset()                             {}
 
 func TestReplaceRunnerStartsAndPublishes(t *testing.T) {
 	var current lifecycleRunner

@@ -1,16 +1,11 @@
 package runner
 
-// PhysicalKeyDown returns true if the virtual key vk is currently held down.
-// Defaults to a no-op; the real implementation is wired via init() in
-// keyboard_windows.go (or per-platform equivalents).
+// PhysicalKeyDown is GetAsyncKeyState for the bind. The clicker taps the
+// virtual key every cycle so this can see a real release.
 var PhysicalKeyDown = func(vk int32) bool { return false }
 
-// EmergencyKeyDown reports the desktop state of an emergency stop key such
-// as End or F12. It is separate from PhysicalKeyDown because trigger state
-// must remain isolated from virtual VIIPER input.
+// EmergencyKeyDown is GetAsyncKeyState for End/F12.
 var EmergencyKeyDown = func(vk int32) bool { return false }
 
-// PollKeyToggle detects a rising edge on vk: returns true on the first
-// poll where vk transitions from released to pressed. wasDown must be
-// a caller-owned bool tracking the previous state.
+// PollKeyToggle detects a rising edge on vk.
 var PollKeyToggle = func(wasDown *bool, vk int32) bool { return false }

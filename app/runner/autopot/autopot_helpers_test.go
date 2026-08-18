@@ -223,7 +223,7 @@ func (s *recordSession) TapKey(vk int32, hold time.Duration) error {
 	return nil
 }
 
-func (s *recordSession) MouseClick(_ time.Duration) error { return nil }
+func (s *recordSession) Reset() {}
 
 type guardedTapSession struct {
 	mu      sync.Mutex
@@ -243,7 +243,7 @@ func (s *guardedTapSession) TapKey(vk int32, hold time.Duration) error {
 	return nil
 }
 
-func (s *guardedTapSession) MouseClick(_ time.Duration) error { return nil }
+func (s *guardedTapSession) Reset() {}
 
 func (s *guardedTapSession) snapshot() []string {
 	s.mu.Lock()

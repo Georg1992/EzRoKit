@@ -16,13 +16,12 @@ type mockSession struct {
 
 func (m *mockSession) TapKey(vk int32, hold time.Duration) error {
 	m.tapCount.Add(1)
-	// Honor the hold (the real ViiperSession also does a Sleep between
-	// KeyDown and KeyUp) so a high tap rate simulates real load.
+	// Honor the hold so a high tap rate simulates real load.
 	time.Sleep(hold)
 	return nil
 }
 
-func (m *mockSession) MouseClick(_ time.Duration) error { return nil }
+func (m *mockSession) Reset() {}
 func (m *mockSession) TapCount() int64                  { return m.tapCount.Load() }
 
 // TestTimerKeyRunnerStress starts a real TimerKeyRunner (whose run() loop
@@ -101,9 +100,9 @@ func TestTimerKeyRunnerStress(t *testing.T) {
 }
 
 // TestKeyChainRunnerStress starts a real KeyChainRunner. Its run() loop
-// calls windows.PhysicalKeyDown(trigger) on every poll; in a non-game
-// test env that returns false and the loop just sleeps — but the loop
-// body (settings read, Paused check, Stop machinery) is still the same
+// calls PhysicalKeyDown(trigger) on every poll; in a non-game test env
+// that returns false and the loop just sleeps — but the loop body
+// (settings read, Paused check, Stop machinery) is still the same
 // pattern the other runners use, so the race surface is real.
 func TestKeyChainRunnerStress(t *testing.T) {
 	sess := &mockSession{}

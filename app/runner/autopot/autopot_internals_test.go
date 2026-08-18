@@ -320,7 +320,7 @@ func TestPotsEndedTap_TapKeyError(t *testing.T) {
 type errorSession struct{}
 
 func (s *errorSession) TapKey(_ int32, _ time.Duration) error { return fmt.Errorf("session error") }
-func (s *errorSession) MouseClick(_ time.Duration) error      { return nil }
+func (s *errorSession) Reset()                                {}
 
 // initialSnapshotReader returns a recovered value on its first actual read.
 // The initial low result supplied to healUntilWithInitial must still trigger

@@ -14,24 +14,15 @@ const (
 	PollInterval      = 10 * time.Millisecond
 	MinPollWait       = time.Millisecond
 	CaptureRetryDelay = 50 * time.Millisecond
-	// KeyTapHold must span more than one HID poll. A 1ms key tap can be
-	// overwritten by the release report before the 5ms keyboard endpoint
-	// is polled, causing AutoPot, KeyChain, and TimerKey presses to vanish.
-	// Keep the generic tools faster than the clicker's 20ms hardened tap,
-	// while still giving VIIPER two polling opportunities.
-	KeyTapHold       = 2 * HIDPollInterval
+	// KeyTapHold is how long a key or button stays down so the host can
+	// see it before the matching up.
+	KeyTapHold       = HIDPollInterval
 	KeyBindTimeout   = 5 * time.Second
 	SessionCloseWait = 10 * time.Second
 )
 
-// HIDPollInterval is the USB interrupt polling interval (BInterval) of the
-// VIIPER keyboard and mouse endpoints. Each device keeps a single pending
-// input report — a newer report overwrites an older one that the host has
-// not polled yet. Any key/button hold shorter than HIDPollInterval can
-// therefore be silently dropped (down overwritten by up) before the game
-// ever sees it. Any hold strictly longer than this interval guarantees the
-// down-report is transmitted (the clicker uses 4× as margin so the press
-// also spans a typical game frame).
+// HIDPollInterval is the USB interrupt interval of the VIIPER keyboard
+// and mouse endpoints (BInterval = 5 ms).
 const HIDPollInterval = 5 * time.Millisecond
 
 // Virtual-key codes for the start/stop toggle watcher.
