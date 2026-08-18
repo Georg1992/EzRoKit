@@ -17,10 +17,15 @@ type InputSession interface {
 	Reset()
 }
 
-// OrderedInputSession can execute a clicker cycle as one serialized action:
-// key down, mouse click, key up. The virtual key must come up every cycle
-// so Windows can see a physical release.
-type OrderedInputSession interface {
+// ClickerInputSession runs one clicker cycle as a single serialized action.
+//
+// A session only decides what the game receives. It never asks whether a
+// physical key is still held: that belongs to the runner driving it, so the
+// input side and the detection side stay independent.
+type ClickerInputSession interface {
 	InputSession
-	KeyDownThenMouseClick(vk int32, afterKey, afterMouse time.Duration) error
+	// TapKeyWithClick presses the key, clicks the left button while it is down,
+	// then releases the key. hold is how long each down state lasts, so a game
+	// rendering at 60fps has a frame to see it.
+	TapKeyWithClick(vk int32, hold time.Duration) error
 }

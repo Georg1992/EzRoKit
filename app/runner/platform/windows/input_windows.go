@@ -14,7 +14,8 @@ var (
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 )
 
-// AsyncKeyDown is GetAsyncKeyState. Binds, End, and F12 all use this.
+// AsyncKeyDown is GetAsyncKeyState. End/F12 use this. Binds use Raw Input
+// so a virtual tap-up of the same key is not treated as a release.
 func AsyncKeyDown(vk int32) bool {
 	ret, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
 	return ret&0x8000 != 0

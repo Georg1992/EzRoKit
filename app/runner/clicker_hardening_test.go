@@ -6,32 +6,56 @@ import (
 	"time"
 )
 
-type orderedClickerSession struct {
+// cycleClickerSession records what the game would receive. A cycle is one call,
+// so an interleaved event from another runner cannot land inside it.
+type cycleClickerSession struct {
 	mu     sync.Mutex
 	events []string
 	holds  []time.Duration
+	cycles int
+	resets int
 }
 
-func (s *orderedClickerSession) TapKey(vk int32, hold time.Duration) error {
-	s.mu.Lock()
-	s.events = append(s.events, "key")
-	s.holds = append(s.holds, hold)
-	s.mu.Unlock()
-	_ = vk
-	return nil
-}
-func (s *orderedClickerSession) Reset() {}
-func (s *orderedClickerSession) KeyDownThenMouseClick(_ int32, afterKey, afterMouse time.Duration) error {
+func (s *cycleClickerSession) TapKey(int32, time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.events = append(s.events, "key", "mouse")
-	s.holds = append(s.holds, afterKey, afterMouse)
+	s.events = append(s.events, "other-key")
 	return nil
 }
-func (s *orderedClickerSession) snapshot() ([]string, []time.Duration) {
+
+func (s *cycleClickerSession) Reset() {
+	s.mu.Lock()
+	s.resets++
+	s.mu.Unlock()
+}
+
+func (s *cycleClickerSession) TapKeyWithClick(_ int32, hold time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cycles++
+	s.events = append(s.events, "key")
+	s.holds = append(s.holds, hold)
+	s.events = append(s.events, "mouse")
+	s.holds = append(s.holds, hold)
+	return nil
+}
+
+func (s *cycleClickerSession) snapshot() ([]string, []time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.events...), append([]time.Duration(nil), s.holds...)
+}
+
+func (s *cycleClickerSession) cycleCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cycles
+}
+
+func (s *cycleClickerSession) resetCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resets
 }
 
 func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
@@ -39,7 +63,7 @@ func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
 	defer func() { PhysicalKeyDown = orig }()
 	PhysicalKeyDown = func(vk int32) bool { return vk == 'D' }
 
-	sess := &orderedClickerSession{}
+	sess := &cycleClickerSession{}
 	r := New(Config{
 		Session: sess,
 		Slots: [ClickerSlotCount]ClickerSlot{
@@ -84,45 +108,65 @@ func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
 	}
 }
 
-type concurrentOrderSession struct {
-	mu           sync.Mutex
-	events       []string
-	atomicCycles int
+// A cycle only starts while the bind is physically held, so a release stops the
+// clicker without needing the session to re-check anything mid-write.
+func TestClicker_NoCycleStartsAfterTheHoldDrops(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+
+	var mu sync.Mutex
+	checks := 0
+	PhysicalKeyDown = func(vk int32) bool {
+		if vk != 'D' {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		checks++
+		return checks <= 3
+	}
+
+	sess := &cycleClickerSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1, MouseClick: true},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		r.Stop()
+		r.Wait()
+	}()
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, _ = sess.snapshot(); sess.cycleCount() >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if sess.cycleCount() != 1 {
+		t.Fatalf("expected exactly one cycle before the hold dropped, got %d", sess.cycleCount())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.cycleCount(); got != 1 {
+		t.Fatalf("a cycle started after the hold dropped: %d cycles", got)
+	}
+	if sess.resetCount() == 0 {
+		t.Fatal("dropped hold did not release the virtual key")
+	}
 }
 
-func (s *concurrentOrderSession) TapKey(_ int32, _ time.Duration) error {
-	s.mu.Lock()
-	s.events = append(s.events, "other-key")
-	s.mu.Unlock()
-	return nil
-}
-
-func (s *concurrentOrderSession) Reset() {}
-
-func (s *concurrentOrderSession) KeyDownThenMouseClick(_ int32, _, _ time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.atomicCycles++
-	s.events = append(s.events, "key")
-	// Keep the critical section occupied long enough for competing input to
-	// contend with it; the pair must still remain adjacent in the event log.
-	time.Sleep(time.Millisecond)
-	s.events = append(s.events, "mouse")
-	return nil
-}
-
-func (s *concurrentOrderSession) snapshot() ([]string, int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.events...), s.atomicCycles
-}
-
-func TestClicker_AtomicKeyMouseCycleCannotBeInterleaved(t *testing.T) {
+func TestClicker_CycleCannotBeInterleavedByAnotherRunner(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 	PhysicalKeyDown = func(vk int32) bool { return vk == 'D' }
 
-	sess := &concurrentOrderSession{}
+	sess := &cycleClickerSession{}
 	r := New(Config{
 		Session: sess,
 		Slots: [ClickerSlotCount]ClickerSlot{
@@ -149,12 +193,8 @@ func TestClicker_AtomicKeyMouseCycleCannotBeInterleaved(t *testing.T) {
 		}
 	}()
 
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		_, cycles := sess.snapshot()
-		if cycles >= 4 {
-			break
-		}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && sess.cycleCount() < 4 {
 		time.Sleep(time.Millisecond)
 	}
 	close(stopOther)
@@ -162,13 +202,13 @@ func TestClicker_AtomicKeyMouseCycleCannotBeInterleaved(t *testing.T) {
 	r.Stop()
 	r.Wait()
 
-	events, cycles := sess.snapshot()
-	if cycles < 4 {
-		t.Fatalf("expected atomic clicker cycles, got %d: %v", cycles, events)
+	events, _ := sess.snapshot()
+	if cycles := sess.cycleCount(); cycles < 4 {
+		t.Fatalf("expected cycles alongside another runner's taps, got %d", cycles)
 	}
 	for i, event := range events {
 		if event == "mouse" && (i == 0 || events[i-1] != "key") {
-			t.Fatalf("mouse was not immediately preceded by its key: %v", events)
+			t.Fatalf("another runner's key landed inside a cycle: %v", events)
 		}
 	}
 }
@@ -178,7 +218,7 @@ func TestClicker_StopCancelsScheduledSleep(t *testing.T) {
 	defer func() { PhysicalKeyDown = orig }()
 	PhysicalKeyDown = func(int32) bool { return true }
 
-	sess := &orderedClickerSession{}
+	sess := &cycleClickerSession{}
 	r := New(Config{
 		Session: sess,
 		Slots: [ClickerSlotCount]ClickerSlot{

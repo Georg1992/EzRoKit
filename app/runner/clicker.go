@@ -91,44 +91,50 @@ func KeysText(vks [ClickerKeysPerBind]int32) string {
 	return strings.Join(names, ", ")
 }
 
+// run cycles one bind for as long as the user holds its key. A cycle leaves
+// nothing pressed, so a release only has to stop the loop; Reset covers a cycle
+// that failed halfway through.
 func (r *Runner) run(ctx context.Context, _ Config) {
 	defer r.settings().Session.Reset()
-	armed := false
+	var heldVK int32
 	for ctx.Err() == nil {
 		if emergencyDown() {
 			return
 		}
 
 		current := r.settings()
-		vk, slot, ok := firstHeldTrigger(current)
+		vk, slot, ok := heldTrigger(current, heldVK)
 		if !ok {
-			if armed {
+			if heldVK != 0 {
 				current.Session.Reset()
-				armed = false
+				heldVK = 0
 			}
 			timing.Sleep(ctx, timing.PollInterval)
 			continue
 		}
+		heldVK = vk
 
 		if err := r.fireCycle(current.Session, slot, vk); err != nil {
 			current.Log(fmt.Sprintf("clicker stopped: %v", err))
 			return
 		}
-		armed = true
-		if ctx.Err() != nil || emergencyDown() {
-			return
-		}
-		if !PhysicalKeyDown(vk) {
-			current.Session.Reset()
-			armed = false
-			continue
-		}
 		sleepCycleDelay(ctx, slotDelay(slot), vk)
-		if ctx.Err() != nil || emergencyDown() || !PhysicalKeyDown(vk) {
-			current.Session.Reset()
-			armed = false
-		}
 	}
+}
+
+// heldTrigger follows one bind until that physical key is released.
+// Other keys and a second bind cannot take over mid-hold.
+func heldTrigger(current Config, heldVK int32) (int32, ClickerSlot, bool) {
+	if heldVK != 0 {
+		if !PhysicalKeyDown(heldVK) {
+			return 0, ClickerSlot{}, false
+		}
+		if slot, ok := slotForTrigger(current, heldVK); ok {
+			return heldVK, slot, true
+		}
+		return 0, ClickerSlot{}, false
+	}
+	return firstHeldTrigger(current)
 }
 
 func firstHeldTrigger(current Config) (int32, ClickerSlot, bool) {
@@ -141,6 +147,18 @@ func firstHeldTrigger(current Config) (int32, ClickerSlot, bool) {
 		}
 	}
 	return 0, ClickerSlot{}, false
+}
+
+func slotForTrigger(current Config, vk int32) (ClickerSlot, bool) {
+	for bi := range current.Slots {
+		slot := current.Slots[bi]
+		for _, trigger := range slot.TriggerVKs {
+			if trigger == vk {
+				return slot, true
+			}
+		}
+	}
+	return ClickerSlot{}, false
 }
 
 func emergencyDown() bool {
@@ -166,15 +184,20 @@ func sleepCycleDelay(ctx context.Context, d time.Duration, vk int32) {
 	}
 }
 
+// fireCycle sends one cycle. Whether a cycle may run at all is decided here, by
+// the physical hold; the session itself only decides what the game receives.
 func (r *Runner) fireCycle(sess session.InputSession, slot ClickerSlot, vk int32) error {
+	if !PhysicalKeyDown(vk) {
+		return nil
+	}
 	if !slot.MouseClick {
 		return sess.TapKey(vk, ClickerHold)
 	}
-	ordered, ok := sess.(session.OrderedInputSession)
+	cycle, ok := sess.(session.ClickerInputSession)
 	if !ok {
-		return fmt.Errorf("input session does not support ordered key+mouse cycles")
+		return fmt.Errorf("input session cannot run a clicker cycle")
 	}
-	return ordered.KeyDownThenMouseClick(vk, ClickerHold, ClickerHold)
+	return cycle.TapKeyWithClick(vk, ClickerHold)
 }
 
 func slotDelay(slot ClickerSlot) time.Duration {

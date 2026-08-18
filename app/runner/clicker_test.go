@@ -36,7 +36,7 @@ func (s *clickerTestSession) Reset() {
 	s.resetCount++
 	s.mu.Unlock()
 }
-func (s *clickerTestSession) KeyDownThenMouseClick(vk int32, _, _ time.Duration) error {
+func (s *clickerTestSession) TapKeyWithClick(vk int32, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failKeys {
@@ -45,8 +45,7 @@ func (s *clickerTestSession) KeyDownThenMouseClick(vk int32, _, _ time.Duration)
 	now := time.Now()
 	s.events = append(s.events,
 		clickerEvent{kind: "key", vk: vk, at: now},
-		clickerEvent{kind: "mouse", at: now},
-	)
+		clickerEvent{kind: "mouse", vk: vk, at: now})
 	return nil
 }
 func (s *clickerTestSession) snapshot() []clickerEvent {
@@ -206,6 +205,54 @@ func TestClicker_SecondBindWaitsForFirstCycle(t *testing.T) {
 	}
 }
 
+func TestClicker_HeldBindIgnoresLaterTrigger(t *testing.T) {
+	orig := PhysicalKeyDown
+	defer func() { PhysicalKeyDown = orig }()
+
+	var mu sync.Mutex
+	held := map[int32]bool{}
+	PhysicalKeyDown = func(vk int32) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return held[vk]
+	}
+
+	sess := &clickerTestSession{}
+	r := New(Config{
+		Session: sess,
+		Slots: [ClickerSlotCount]ClickerSlot{
+			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: false},
+			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: false},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		r.Stop()
+		r.Wait()
+	}()
+
+	mu.Lock()
+	held['D'] = true
+	mu.Unlock()
+	waitForKeyEvent(t, sess, 'D', 200*time.Millisecond)
+
+	mu.Lock()
+	held['T'] = true
+	mu.Unlock()
+	time.Sleep(40 * time.Millisecond)
+	if n := countKeyEvents(sess.snapshot(), 'T'); n != 0 {
+		t.Fatalf("T took over while D was still held: %v", sess.snapshot())
+	}
+
+	mu.Lock()
+	held['D'] = false
+	mu.Unlock()
+	waitForKeyEvent(t, sess, 'T', 200*time.Millisecond)
+}
+
 func TestClicker_UnboundPhysicalKeyDoesNotInterruptTrigger(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
@@ -268,6 +315,8 @@ func countKeyEvents(events []clickerEvent, vk int32) int {
 	return n
 }
 
+// Every click must sit directly behind its key: a click on its own makes the
+// character walk to the cursor instead of using the skill.
 func TestClicker_NeverEmitsTwoMiceInARow(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
@@ -315,8 +364,14 @@ func TestClicker_NeverEmitsTwoMiceInARow(t *testing.T) {
 		t.Fatalf("expected several cycles, got %v", events)
 	}
 	for i, event := range events {
-		if event.kind == "mouse" && (i == 0 || events[i-1].kind != "key") {
+		if event.kind != "mouse" {
+			continue
+		}
+		if i == 0 || events[i-1].kind != "key" {
 			t.Fatalf("mouse was not immediately preceded by a key: %v", events)
+		}
+		if events[i-1].vk != event.vk {
+			t.Fatalf("mouse followed a different key than its own cycle: %v", events)
 		}
 	}
 }
@@ -368,10 +423,13 @@ func TestClicker_ReleasedTriggerStopsImmediately(t *testing.T) {
 	held = false
 	mu.Unlock()
 	time.Sleep(timing.PollInterval + 20*time.Millisecond)
-	stoppedAt := countKeyEvents(sess.snapshot(), 'D')
+	stoppedAt := len(sess.snapshot())
 	time.Sleep(50 * time.Millisecond)
-	if got := countKeyEvents(sess.snapshot(), 'D'); got != stoppedAt {
+	if got := len(sess.snapshot()); got != stoppedAt {
 		t.Fatalf("released trigger kept cycling: %d then %d events", stoppedAt, got)
+	}
+	if sess.resets() == 0 {
+		t.Fatal("release did not send key-up")
 	}
 }
 
@@ -503,7 +561,7 @@ type splitOnlySession struct {
 func (s *splitOnlySession) TapKey(int32, time.Duration) error { s.keys++; return nil }
 func (s *splitOnlySession) Reset()                            {}
 
-func TestClicker_MouseClickRequiresOrderedSession(t *testing.T) {
+func TestClicker_MouseClickRequiresCycleSession(t *testing.T) {
 	orig := PhysicalKeyDown
 	defer func() { PhysicalKeyDown = orig }()
 	PhysicalKeyDown = func(int32) bool { return true }
@@ -526,10 +584,10 @@ func TestClicker_MouseClickRequiresOrderedSession(t *testing.T) {
 	if r.Running() {
 		r.Stop()
 		r.Wait()
-		t.Fatal("clicker kept running without an ordered session")
+		t.Fatal("clicker kept running without a cycle-capable session")
 	}
 	r.Wait()
 	if sess.keys != 0 {
-		t.Fatalf("unordered path sent input: keys=%d", sess.keys)
+		t.Fatalf("session that cannot click still received keys: keys=%d", sess.keys)
 	}
 }

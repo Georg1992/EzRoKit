@@ -14,7 +14,7 @@ import (
 
 var (
 	_ session.InputSession        = (*ViiperSession)(nil)
-	_ session.OrderedInputSession = (*ViiperSession)(nil)
+	_ session.ClickerInputSession = (*ViiperSession)(nil)
 )
 
 const inputWriteTimeout = 500 * time.Millisecond
@@ -40,36 +40,37 @@ func (s *ViiperSession) TapKey(vk int32, hold time.Duration) error {
 	})
 }
 
-// KeyDownThenMouseClick: key down, mouse click, key up. Each HID write
-// returns only after that device's USB host has polled the new state.
-// afterKey/afterMouse are extra game settle time after that poll.
-// A mouse click is never sent if the key write fails.
-func (s *ViiperSession) KeyDownThenMouseClick(vk int32, afterKey, afterMouse time.Duration) error {
+// TapKeyWithClick is one clicker cycle: the game sees the skill key go down, a
+// left click while it is down, then the key come up. Each HID write returns only
+// after that device's USB host has polled the new state, and the whole cycle is
+// serialized against other runners' input.
+func (s *ViiperSession) TapKeyWithClick(vk int32, hold time.Duration) error {
 	return s.do(func() error {
 		if err := keyDownLocked(s.keyStream, vk); err != nil {
 			_ = keyUpLocked(s.keyStream)
-			_ = mouseUpLocked(s.mouseStream)
 			return err
 		}
-		if afterKey > 0 {
-			time.Sleep(afterKey)
+		if hold > 0 {
+			time.Sleep(hold)
 		}
-		var mouseErr error
-		if err := mouseDownLocked(s.mouseStream); err != nil {
-			_ = mouseUpLocked(s.mouseStream)
-			mouseErr = err
-		} else {
-			if afterMouse > 0 {
-				time.Sleep(afterMouse)
-			}
-			mouseErr = mouseUpLocked(s.mouseStream)
-		}
+		clickErr := s.clickLocked(hold)
 		keyErr := keyUpLocked(s.keyStream)
-		if mouseErr != nil {
-			return mouseErr
+		if clickErr != nil {
+			return clickErr
 		}
 		return keyErr
 	})
+}
+
+func (s *ViiperSession) clickLocked(hold time.Duration) error {
+	if err := mouseDownLocked(s.mouseStream); err != nil {
+		_ = mouseUpLocked(s.mouseStream)
+		return err
+	}
+	if hold > 0 {
+		time.Sleep(hold)
+	}
+	return mouseUpLocked(s.mouseStream)
 }
 
 func (s *ViiperSession) do(fn func() error) error {
