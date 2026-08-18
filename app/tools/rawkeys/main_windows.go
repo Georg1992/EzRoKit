@@ -10,10 +10,11 @@
 // that arrived after that key's last key-up. It only reads input; it never sends
 // any.
 //
-// Build and run, from the app directory:
+// Build and run, from the app directory. The log lands next to the exe, in the
+// build directory, so neither shows up beside the shipped app.exe:
 //
-//	go build -o ..\rawkeys.exe .\tools\rawkeys
-//	..\rawkeys.exe [seconds]
+//	go build -o .\build\rawkeys.exe .\tools\rawkeys
+//	.\build\rawkeys.exe [seconds]
 package main
 
 import (
