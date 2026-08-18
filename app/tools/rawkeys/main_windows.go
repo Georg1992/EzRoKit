@@ -3,13 +3,17 @@
 // Command rawkeys records every Raw Input keyboard event Windows delivers, with
 // the device handle behind it, and writes them to rawkeys.log next to the exe.
 //
-// It is the reference for what the hold layer should see: run it while holding a
-// bind in the game with the clicker running, and the log shows which Raw Input
-// handle carries each press and release, VIIPER's taps included, plus a summary
-// of any key-down that arrived after that key's last key-up. It only reads input;
-// it never sends any.
+// It is a diagnostic, not part of app.exe, and the reference for what the hold
+// layer in runner/platform/windows should see: run it while holding a bind in the
+// game with the clicker running, and the log shows which Raw Input handle carries
+// each press and release, VIIPER's taps included, plus a summary of any key-down
+// that arrived after that key's last key-up. It only reads input; it never sends
+// any.
 //
-// Usage: rawkeys.exe [seconds]
+// Build and run, from the app directory:
+//
+//	go build -o ..\rawkeys.exe .\tools\rawkeys
+//	..\rawkeys.exe [seconds]
 package main
 
 import (
