@@ -140,6 +140,7 @@ var (
 	rawWndProc  uintptr
 	rawStart    sync.Once
 	rawStartErr error
+	rawThreadID uintptr
 	KeyboardLog = func(string) {}
 )
 
@@ -170,6 +171,21 @@ func PhysicalKeyDown(vk int32) bool {
 // While a key is held the keyboard repeats the press about every 31ms, so a press
 // only starts a hold when the key is not already held, and only the keyboard
 // holding a key can release it.
+func (p *physicalKeyboard) setHeldFromHook(vk int32, down bool) {
+	if vk < firstBindableVK || vk == vkNone {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if down {
+		if _, held := p.held[vk]; !held {
+			p.held[vk] = "hook"
+		}
+		return
+	}
+	delete(p.held, vk)
+}
+
 func (p *physicalKeyboard) applyKey(device uintptr, vk int32, down bool) {
 	if vk < firstBindableVK || vk == vkNone {
 		return
@@ -372,6 +388,8 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 	defer runtime.UnlockOSThread()
 
 	threadID, _, _ := procGetCurrentThreadID.Call()
+	rawThreadID = threadID
+	defer func() { rawThreadID = 0 }()
 	className, _ := syscall.UTF16PtrFromString("EzRoKitPhysicalKeyboard")
 
 	rawWndProc = syscall.NewCallback(func(hwnd, message, wParam, lParam uintptr) uintptr {
@@ -438,6 +456,11 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 		ready <- err
 		return
 	}
+	if err := installKeyboardSwallowHook(); err != nil {
+		procDestroyWindow.Call(hwnd)
+		ready <- err
+		return
+	}
 
 	ready <- nil
 	go func() {
@@ -451,9 +474,14 @@ func rawKeyboardThread(ctx context.Context, ready chan<- error) {
 		if result == 0 || result == ^uintptr(0) {
 			break
 		}
+		if message.message == wmForceKeyUp {
+			sendInjectedKeyUp(int32(message.wParam))
+			continue
+		}
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
 	}
 
+	uninstallKeyboardSwallowHook()
 	procDestroyWindow.Call(hwnd)
 	clearPhysicalKeyState()
 }

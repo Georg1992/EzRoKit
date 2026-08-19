@@ -42,8 +42,16 @@ func stubPhysicalKey(t *testing.T, fn func(int32) bool) {
 	t.Cleanup(func() { PhysicalKeyDown = orig })
 }
 
+func stubSwallowKeys(t *testing.T, fn func([]int32)) {
+	t.Helper()
+	orig := SwallowPhysicalKeys
+	SwallowPhysicalKeys = fn
+	t.Cleanup(func() { SwallowPhysicalKeys = orig })
+}
+
 func startKeyChain(t *testing.T, sess *keychainSession, sw KeyChainSwitch) *KeyChainRunner {
 	t.Helper()
+	stubSwallowKeys(t, func([]int32) {})
 	r := NewKeyChain(KeyChainConfig{
 		Session: sess,
 		Switches: [KeyChainCount]KeyChainSwitch{
@@ -216,6 +224,29 @@ func TestKeyChain_HeldSwitchIgnoresLaterTrigger(t *testing.T) {
 	t.Fatalf("T never ran after D released: %v", sess.snapshot())
 }
 
+func TestKeyChain_RepeatedKeysIncludingTrigger(t *testing.T) {
+	stubPhysicalKey(t, func(vk int32) bool { return vk == '1' })
+
+	sess := &keychainSession{}
+	k := NewKeyChain(KeyChainConfig{Session: sess, Log: func(string) {}})
+	err := k.executeChain(context.Background(), sess, KeyChainSwitch{
+		Keys: [KeyChainSlotCount]int32{'1', '2', '1', '3', '1', '4'},
+	})
+	if err != nil {
+		t.Fatalf("executeChain: %v", err)
+	}
+	got := sess.snapshot()
+	want := []int32{'1', '2', '1', '3', '1', '4'}
+	if len(got) != len(want) {
+		t.Fatalf("sequence = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sequence = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestKeyChain_ExecuteChainSendsEveryKey(t *testing.T) {
 	stubPhysicalKey(t, func(vk int32) bool { return vk == 'A' })
 
@@ -309,6 +340,91 @@ func TestKeyChain_EmergencyToggleStopsRunawayChain(t *testing.T) {
 		t.Fatalf("keychain emitted after emergency stop: %d then %d events", stoppedAt, got)
 	}
 	r.Wait()
+}
+
+func TestChainTriggerVKs_ActiveTriggersOnly(t *testing.T) {
+	cfg := KeyChainConfig{
+		Switches: [KeyChainCount]KeyChainSwitch{
+			{Keys: [KeyChainSlotCount]int32{'1', '2'}},
+			{Keys: [KeyChainSlotCount]int32{0, 'A'}},
+			{Keys: [KeyChainSlotCount]int32{'B'}},
+		},
+	}
+	got := chainTriggerVKs(cfg)
+	if len(got) != 2 || got[0] != '1' || got[1] != 'B' {
+		t.Fatalf("chainTriggerVKs = %v, want [1 B]", got)
+	}
+}
+
+func TestKeyChain_TapChainKeyMarksTappingVK(t *testing.T) {
+	var mu sync.Mutex
+	var got []int32
+	orig := SetTappingVK
+	SetTappingVK = func(vk int32) {
+		mu.Lock()
+		got = append(got, vk)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { SetTappingVK = orig })
+
+	sess := &keychainSession{}
+	if err := tapChainKey(sess, '1'); err != nil {
+		t.Fatalf("tapChainKey: %v", err)
+	}
+	mu.Lock()
+	seq := append([]int32(nil), got...)
+	mu.Unlock()
+	if len(seq) != 2 || seq[0] != '1' || seq[1] != 0 {
+		t.Fatalf("SetTappingVK sequence = %v, want [1 0]", seq)
+	}
+	if keys := sess.snapshot(); len(keys) != 1 || keys[0] != '1' {
+		t.Fatalf("tapped %v, want [1]", keys)
+	}
+}
+
+func TestKeyChain_SwallowsTriggerWhileRunning(t *testing.T) {
+	var mu sync.Mutex
+	var last []int32
+	stubSwallowKeys(t, func(vks []int32) {
+		mu.Lock()
+		last = append([]int32(nil), vks...)
+		mu.Unlock()
+	})
+	stubPhysicalKey(t, func(int32) bool { return false })
+
+	sess := &keychainSession{}
+	r := NewKeyChain(KeyChainConfig{
+		Session: sess,
+		Switches: [KeyChainCount]KeyChainSwitch{
+			{Keys: [KeyChainSlotCount]int32{'1', '2', '1'}},
+		},
+		Log: func(string) {},
+	})
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := append([]int32(nil), last...)
+		mu.Unlock()
+		if len(got) == 1 && got[0] == '1' {
+			r.Stop()
+			r.Wait()
+			mu.Lock()
+			cleared := last
+			mu.Unlock()
+			if len(cleared) != 0 {
+				t.Fatalf("stop left swallow set %v", cleared)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.Stop()
+	r.Wait()
+	t.Fatal("runner never swallowed trigger 1")
 }
 
 func TestKeyChain_HoldLoopsWithoutIdlePollGap(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 
 func init() {
 	PhysicalKeyDown = windows.PhysicalKeyDown
+	SwallowPhysicalKeys = windows.SwallowPhysicalKeys
+	SetTappingVK = windows.SetTappingVK
 	SetKeyboardLog = func(log func(string)) {
 		if log == nil {
 			windows.KeyboardLog = func(string) {}

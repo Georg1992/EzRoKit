@@ -7,6 +7,7 @@ import (
 
 	"ezrokit/runner"
 	"github.com/lxn/walk"
+	"github.com/lxn/win"
 )
 
 type keyChainSlotWidgets struct {
@@ -26,6 +27,7 @@ type keychainController struct {
 	switches     [runner.KeyChainCount]keychainSwitchUI
 	visibleCount int
 	addBtn       *walk.PushButton
+	updating     bool
 }
 
 func (c *keychainController) setKeyText(switchIdx, slotIdx int, vk int32) {
@@ -105,7 +107,7 @@ func (a *guiApp) buildKeyChainTab(page *walk.TabPage) error {
 	a.updateKeyChainAddButton()
 	a.updateKeyChainRemoveButtons()
 
-	if _, err := newHint(page, "The Trigger is the first key sent. Tap it for one full pass; hold to loop; release finishes the current pass."); err != nil {
+	if _, err := newHint(page, "The Trigger starts the chain and is also the first key sent. Keys may repeat. Tap for one pass; hold to loop. Holding the Trigger does not spam it in the game — only the chain plays. Other keys stay usable. End/F12 still stop."); err != nil {
 		return err
 	}
 	return nil
@@ -303,6 +305,7 @@ func (a *guiApp) buildKeyChainStep(parent walk.Container, switchIdx, slotIdx, he
 	si, slot := switchIdx, slotIdx
 	w.keyEdit.MouseDown().Attach(func(_ int, _ int, button walk.MouseButton) {
 		if button == walk.LeftButton {
+			a.submitChainDelayEdit()
 			a.bindKeyChainKey(si, slot)
 		}
 	})
@@ -384,7 +387,7 @@ func (a *guiApp) updateKeyChainRemoveButtons() {
 }
 
 func (a *guiApp) syncKeyChainSettings() {
-	if a.profileApplying {
+	if a.profileApplying || a.keychain.updating {
 		return
 	}
 	if !a.isStarted() {
@@ -483,21 +486,25 @@ func (a *guiApp) stopKeyChainRunner() {
 }
 
 func (a *guiApp) resetKeyChainSwitchData(switchIdx int) {
+	a.keychain.updating = true
+	defer func() { a.keychain.updating = false }()
 	sw := &a.keychain.switches[switchIdx]
 	for i := 0; i < runner.KeyChainSlotCount; i++ {
 		sw.keyVKs[i] = 0
 		a.keychain.setKeyText(switchIdx, i, 0)
-		sw.slots[i].delayEdit.SetValue(0)
+		_ = sw.slots[i].delayEdit.SetValue(0)
 	}
 }
 
 func (a *guiApp) copyKeyChainSwitchData(from, to int) {
+	a.keychain.updating = true
+	defer func() { a.keychain.updating = false }()
 	src := &a.keychain.switches[from]
 	dst := &a.keychain.switches[to]
 	for i := 0; i < runner.KeyChainSlotCount; i++ {
 		dst.keyVKs[i] = src.keyVKs[i]
 		a.keychain.setKeyText(to, i, src.keyVKs[i])
-		dst.slots[i].delayEdit.SetValue(src.slots[i].delayEdit.Value())
+		_ = dst.slots[i].delayEdit.SetValue(src.slots[i].delayEdit.Value())
 	}
 }
 
@@ -532,6 +539,7 @@ func (a *guiApp) removeKeyChainSwitch(switchIdx int) {
 }
 
 func (a *guiApp) bindKeyChainKey(switchIdx, slotIdx int) {
+	a.submitChainDelayEdit()
 	a.bindKeyFlow(
 		func() bool {
 			if !a.isViiperReady() || a.bindingActive ||
@@ -547,11 +555,69 @@ func (a *guiApp) bindKeyChainKey(switchIdx, slotIdx int) {
 		func() { a.bindingActive = false },
 		func() { a.setKeyChainConfigEnabled(a.isViiperReady()) },
 		func(vk int32) {
-			a.unsetKeyBinding(vk)
+			a.unsetKeyBindingExceptChain(vk, switchIdx)
 			a.keychain.switches[switchIdx].keyVKs[slotIdx] = vk
 			a.keychain.setKeyText(switchIdx, slotIdx, vk)
 			a.appendLog(fmt.Sprintf("Switch %d key %d: %s", switchIdx+1, slotIdx+1, runner.KeyName(vk)))
 			a.syncKeyChainSettings()
 		},
 	)
+}
+
+func (a *guiApp) hookChainDelayCommits() {
+	prev := walk.FocusedWindow()
+	for i := 0; i < runner.KeyChainCount; i++ {
+		for j := 0; j < runner.KeyChainSlotCount; j++ {
+			a.hookChainDelayCommit(a.keychain.switches[i].slots[j].delayEdit)
+		}
+	}
+	if prev != nil {
+		_ = prev.SetFocus()
+		return
+	}
+	if a.mainWindow != nil {
+		_ = a.mainWindow.SetFocus()
+	}
+}
+
+func (a *guiApp) hookChainDelayCommit(edit *walk.NumberEdit) {
+	if edit == nil {
+		return
+	}
+	if err := edit.SetFocus(); err != nil {
+		return
+	}
+	inner := walk.FocusedWindow()
+	if inner == nil {
+		return
+	}
+	hwnd := inner.Handle()
+	inner.AsWindowBase().KeyDown().Attach(func(key walk.Key) {
+		a.onChainDelayTriggerKey(int32(key), hwnd)
+	})
+}
+
+func (a *guiApp) onChainDelayTriggerKey(vk int32, editHWND win.HWND) {
+	if !a.isChainTriggerKey(vk) {
+		return
+	}
+	var msg win.MSG
+	_ = win.PeekMessage(&msg, editHWND, win.WM_CHAR, win.WM_CHAR, win.PM_REMOVE)
+	a.submitChainDelayEdit()
+}
+
+func (a *guiApp) isChainTriggerKey(vk int32) bool {
+	for i := 0; i < a.keychain.visibleCount; i++ {
+		if a.keychain.switches[i].keyVKs[0] == vk {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *guiApp) submitChainDelayEdit() {
+	if a.mainWindow != nil {
+		_ = a.mainWindow.SetFocus()
+	}
+	a.syncKeyChainSettings()
 }

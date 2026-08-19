@@ -164,6 +164,22 @@ func TestPhysicalKeyboard_MouseButtonsAreNotBinds(t *testing.T) {
 	}
 }
 
+func TestPhysicalKeyboard_HookHoldAndRelease(t *testing.T) {
+	p := newPhysicalKeyboard()
+	p.setHeldFromHook('1', true)
+	if !keyHeld(p, '1') {
+		t.Fatal("hook down did not hold 1")
+	}
+	p.setHeldFromHook('1', true)
+	if !keyHeld(p, '1') {
+		t.Fatal("repeated hook down dropped 1")
+	}
+	p.setHeldFromHook('1', false)
+	if keyHeld(p, '1') {
+		t.Fatal("hook up left 1 held")
+	}
+}
+
 func TestPhysicalKeyboard_KeysAreIndependent(t *testing.T) {
 	p := oneKeyboard()
 	p.applyKey(0x1003F, 'E', true)

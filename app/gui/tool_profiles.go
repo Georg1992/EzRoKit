@@ -31,43 +31,43 @@ type toolProfileController struct {
 // stores virtual-key codes rather than display names so a profile can restore
 // bindings exactly, even if the key-name formatting changes later.
 type toolProfile struct {
-	Name       string              `json:"name"`
-	Clicker    clickerProfile      `json:"clicker"`
-	Timer      timerProfile        `json:"timer"`
-	AutoPot    autoPotProfile      `json:"auto_pot"`
-	KeyChain   keyChainProfile     `json:"key_chain"`
+	Name     string          `json:"name"`
+	Clicker  clickerProfile  `json:"clicker"`
+	Timer    timerProfile    `json:"timer"`
+	AutoPot  autoPotProfile  `json:"auto_pot"`
+	KeyChain keyChainProfile `json:"key_chain"`
 }
 
 type clickerProfile struct {
-	VisibleCount int                          `json:"visible_count"`
+	VisibleCount int                                         `json:"visible_count"`
 	Slots        [runner.ClickerSlotCount]runner.ClickerSlot `json:"slots"`
 }
 
 type timerProfile struct {
-	VisibleCount int                         `json:"visible_count"`
+	VisibleCount int                                        `json:"visible_count"`
 	Slots        [runner.TimerKeySlotCount]timerProfileSlot `json:"slots"`
 }
 
 type timerProfileSlot struct {
-	Enabled    bool  `json:"enabled"`
-	KeyVK      int32 `json:"key_vk"`
-	IntervalSec int  `json:"interval_sec"`
+	Enabled     bool  `json:"enabled"`
+	KeyVK       int32 `json:"key_vk"`
+	IntervalSec int   `json:"interval_sec"`
 }
 
 type autoPotProfile struct {
-	HPEnabled       bool   `json:"hp_enabled"`
-	SPEnabled       bool   `json:"sp_enabled"`
-	HPThreshold     int    `json:"hp_threshold"`
-	SPThreshold     int    `json:"sp_threshold"`
-	HPKeyVK         int32  `json:"hp_key_vk"`
-	SPKeyVK         int32  `json:"sp_key_vk"`
-	AddressMode     bool   `json:"address_mode"`
-	AddressProfile  string `json:"address_profile"`
-	WindowTitle     string `json:"window_title"`
+	HPEnabled      bool   `json:"hp_enabled"`
+	SPEnabled      bool   `json:"sp_enabled"`
+	HPThreshold    int    `json:"hp_threshold"`
+	SPThreshold    int    `json:"sp_threshold"`
+	HPKeyVK        int32  `json:"hp_key_vk"`
+	SPKeyVK        int32  `json:"sp_key_vk"`
+	AddressMode    bool   `json:"address_mode"`
+	AddressProfile string `json:"address_profile"`
+	WindowTitle    string `json:"window_title"`
 }
 
 type keyChainProfile struct {
-	VisibleCount int                                  `json:"visible_count"`
+	VisibleCount int                                         `json:"visible_count"`
 	Switches     [runner.KeyChainCount]keyChainProfileSwitch `json:"switches"`
 }
 
@@ -284,9 +284,9 @@ func (a *guiApp) captureToolProfile(name string) toolProfile {
 	a.commitHPThresholdEdit()
 	a.commitSPThresholdEdit()
 	profile := toolProfile{
-		Name: name,
+		Name:    name,
 		Clicker: clickerProfile{VisibleCount: a.clicker.visibleCount},
-		Timer: timerProfile{VisibleCount: a.timer.visibleCount},
+		Timer:   timerProfile{VisibleCount: a.timer.visibleCount},
 		AutoPot: autoPotProfile{
 			HPEnabled:      a.autopot.hpEnabledCB.Checked(),
 			SPEnabled:      a.autopot.spEnabledCB.Checked(),

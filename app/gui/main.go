@@ -190,6 +190,7 @@ func (a *guiApp) createWindow() error {
 	a.setInitialState()
 	a.onStartViiper()
 
+	mw.Starting().Attach(a.hookChainDelayCommits)
 	mw.Show()
 	mw.Run()
 	return nil
@@ -776,8 +777,13 @@ func (a *guiApp) guiLog(fn func(string)) func(string) {
 // If found, it clears the old binding (UI label + state), syncs the
 // affected runner, and logs the change. Call this from any onPress
 // handler BEFORE assigning the key to the new slot so a key can only
-// ever be bound in one place at a time.
+// ever be bound in one place at a time, except that one keychain switch
+// may repeat the same key (including the trigger).
 func (a *guiApp) unsetKeyBinding(vk int32) {
+	a.unsetKeyBindingExceptChain(vk, -1)
+}
+
+func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 	// Check clicker binds (each may hold multiple independent keys).
 	for i := 0; i < a.clicker.visibleCount; i++ {
 		if a.clicker.removeKey(i, vk) {
@@ -814,18 +820,26 @@ func (a *guiApp) unsetKeyBinding(vk int32) {
 		a.syncAutoPotSettings()
 		return
 	}
-	// Check keychain slots across all visible switches.
+	// Other keychain switches cannot keep this key. Slots on keepSwitch stay
+	// so a chain like 1-2-1-3-1-4 can reuse the trigger.
+	cleared := false
 	for si := 0; si < a.keychain.visibleCount; si++ {
+		if si == keepSwitch {
+			continue
+		}
 		sw := &a.keychain.switches[si]
 		for i := 0; i < runner.KeyChainSlotCount; i++ {
-			if sw.keyVKs[i] == vk {
-				sw.keyVKs[i] = 0
-				a.keychain.setKeyText(si, i, 0)
-				a.appendLog(fmt.Sprintf("Key %s removed from Switch %d slot %d (reassigned)", runner.KeyName(vk), si+1, i+1))
-				a.syncKeyChainSettings()
-				return
+			if sw.keyVKs[i] != vk {
+				continue
 			}
+			sw.keyVKs[i] = 0
+			a.keychain.setKeyText(si, i, 0)
+			a.appendLog(fmt.Sprintf("Key %s removed from Switch %d slot %d (reassigned)", runner.KeyName(vk), si+1, i+1))
+			cleared = true
 		}
+	}
+	if cleared {
+		a.syncKeyChainSettings()
 	}
 }
 
