@@ -218,9 +218,9 @@ func (a *guiApp) syncTimerKeySettings() {
 	if a.profileApplying {
 		return
 	}
-	cfg := a.timer.wanted(a.appendLog)
+	cfg := a.timer.wanted(a.fileLog())
 	a.mu.Lock()
-	t := a.timerKeyRunner
+	t := a.tools.timer
 	a.mu.Unlock()
 
 	if t != nil && t.Running() {
@@ -229,7 +229,7 @@ func (a *guiApp) syncTimerKeySettings() {
 			// subsequent sync calls see a stopped state.
 			a.lifecycleMu.Lock()
 			a.mu.Lock()
-			a.timerKeyRunner = nil
+			a.tools.timer = nil
 			a.mu.Unlock()
 			a.lifecycleMu.Unlock()
 			stopRunnerAsync(t)
@@ -240,7 +240,7 @@ func (a *guiApp) syncTimerKeySettings() {
 	}
 
 	if a.isStarted() {
-		a.startTimerKeyRunner(cfg, a.guiLog(a.appendLog))
+		a.startTimerKeyRunner(cfg, a.fileLog())
 	}
 }
 
@@ -265,23 +265,24 @@ func (a *guiApp) startTimerKeyRunner(cfg runner.TimerKeyConfig, log func(string)
 	take := func() lifecycleRunner {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if a.timerKeyRunner == nil {
+		if a.tools.timer == nil {
 			return nil
 		}
-		old := a.timerKeyRunner
-		a.timerKeyRunner = nil
+		old := a.tools.timer
+		a.tools.timer = nil
 		return old
 	}
 	store := func(r lifecycleRunner) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.timerKeyRunner = r.(*runner.TimerKeyRunner)
+		a.tools.timer = r.(*runner.TimerKeyRunner)
 	}
 	replaceRunner(
 		take,
 		store,
 		"Timer keys",
 		log,
+		a.guiLog(a.appendLog),
 		func() runner.InputSession {
 			a.mu.Lock()
 			defer a.mu.Unlock()
@@ -302,7 +303,7 @@ func (a *guiApp) clearTimerKey(index int) {
 	}
 	a.timer.keyVKs[index] = 0
 	a.timer.slots[index].keyLabel.SetText("none")
-	a.appendLog(fmt.Sprintf("Timer %d key cleared", index+1))
+	a.logToFile(fmt.Sprintf("Timer %d key cleared", index+1))
 	a.syncTimerKeySettings()
 }
 
@@ -323,7 +324,7 @@ func (a *guiApp) bindTimerKey(index int) {
 			a.unsetKeyBinding(vk)
 			a.timer.keyVKs[index] = vk
 			a.timer.slots[index].keyLabel.SetText(runner.KeyName(vk))
-			a.appendLog(fmt.Sprintf("Timer %d key: %s", index+1, runner.KeyName(vk)))
+			a.logToFile(fmt.Sprintf("Timer %d key: %s", index+1, runner.KeyName(vk)))
 			a.syncTimerKeySettings()
 		},
 	)

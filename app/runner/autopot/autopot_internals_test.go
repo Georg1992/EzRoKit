@@ -8,6 +8,30 @@ import (
 	"time"
 )
 
+func TestAutoPotConfig_AddressModeRequiresPID(t *testing.T) {
+	cfg := AutoPotConfig{
+		Core: CoreConfig{
+			Session:   &recordSession{},
+			Log:       func(string) {},
+			HPEnabled: true,
+			HPKeyVK:   'Q',
+		},
+		Address: &AddressConfig{},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("validate: expected error for address mode with PID 0")
+	}
+}
+
+func TestAutoPotConfig_HasBoundPotion(t *testing.T) {
+	if (AutoPotConfig{Core: CoreConfig{HPEnabled: true}}).HasBoundPotion() {
+		t.Error("enabled without a key is not a bound potion")
+	}
+	if !(AutoPotConfig{Core: CoreConfig{HPEnabled: true, HPKeyVK: 'Q'}}).HasBoundPotion() {
+		t.Error("enabled HP with a key should count as bound")
+	}
+}
+
 func TestAutoPotDefaultsMissingLog(t *testing.T) {
 	cfg := AutoPotConfig{Core: CoreConfig{Session: &recordSession{}}}
 	ap := NewAutoPot(cfg)
@@ -21,9 +45,6 @@ func TestAutoPotDefaultsMissingLog(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReaderFactory_AddressMode(t *testing.T) {
-	// Address mode with a real PID — attempts to create address reader,
-	// but win.GetProcessBaseAddr will fail in test (no such process).
-	// The reader should fall back to visual mode gracefully.
 	cfg := AutoPotConfig{
 		Address: &AddressConfig{
 			ProcessPID: 12345,
@@ -38,55 +59,21 @@ func TestReaderFactory_AddressMode(t *testing.T) {
 
 	reader, pixel, ocr, isAddress := NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
 
-	// In test env, win.GetProcessBaseAddr fails → falls back to visual.
-	// This is expected — what matters is that the fallback is clean.
-	if isAddress {
-		t.Log("ReaderFactory.Build: address mode succeeded (real process exists)")
-		return
-	}
-	t.Log("ReaderFactory.Build: address mode fell back to visual (expected in test)")
-	if reader == nil {
-		t.Fatal("ReaderFactory.Build: expected non-nil reader after fallback")
-	}
-	if pixel == nil {
-		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader after fallback")
-	}
-	_ = ocr // ocr may be nil (no OCR pipeline in some envs)
-}
-
-func TestReaderFactory_AddressModeFallback(t *testing.T) {
-	// Address mode with PID=0 — should fall back to visual (pixel/OCR).
-	cfg := AutoPotConfig{
-		Core: CoreConfig{
-			HPThreshold: 50,
-			SPThreshold: 50,
-			Log:         func(string) {},
-		},
-	}
-	ap := NewAutoPot(cfg)
-
-	reader, pixel, ocr, isAddress := NewReaderFactory(ap.settings, ap.hpStabilizer, ap.spStabilizer).Build()
-
-	if isAddress {
-		t.Error("ReaderFactory.Build: expected isAddress=false for AddressMode with PID=0")
+	if !isAddress {
+		t.Fatal("ReaderFactory.Build: address mode must stay in address mode")
 	}
 	if reader == nil {
-		t.Fatal("ReaderFactory.Build: expected non-nil reader")
+		t.Fatal("ReaderFactory.Build: expected address reader")
 	}
-	if pixel == nil {
-		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader")
+	if pixel != nil || ocr != nil {
+		t.Errorf("ReaderFactory.Build: address mode must not construct visual readers (pixel=%v ocr=%v)", pixel != nil, ocr != nil)
 	}
-	// OCR may be nil if NewDefaultPipeline() fails (no glyphs in some test envs).
-	// That's fine — pixel-only fallback is expected.
-	if ocr != nil {
-		t.Logf("ReaderFactory.Build: OCR reader created (pipeline available)")
-	} else {
-		t.Log("ReaderFactory.Build: OCR reader nil (pipeline unavailable in test env — expected)")
+	if _, ok := reader.(*addressReader); !ok {
+		t.Fatalf("ReaderFactory.Build: primary reader type %T, want *addressReader", reader)
 	}
 }
 
-func TestReaderFactory_VisualModeNoPID(t *testing.T) {
-	// Visual mode with no address config — pure pixel/OCR path.
+func TestReaderFactory_VisualMode(t *testing.T) {
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
 			HPThreshold: 50,
@@ -107,7 +94,7 @@ func TestReaderFactory_VisualModeNoPID(t *testing.T) {
 	if pixel == nil {
 		t.Error("ReaderFactory.Build: expected non-nil pixelBarReader")
 	}
-	_ = ocr // ocr may be nil depending on pipeline availability
+	_ = ocr
 }
 
 // ---------------------------------------------------------------------------
@@ -158,11 +145,11 @@ func TestReaderController_OCRFailureSwitch(t *testing.T) {
 	ocr := &statusUIReader{}
 	controller := newReaderController(ocr, pixel, ocr, false)
 
-	modeFns := []string{}
+	sink := &recordSink{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-			Log:            func(string) {},
-			OnStatusUIMode: func(s string) { modeFns = append(modeFns, s) },
+			Log:    func(string) {},
+			Status: sink,
 		},
 	}
 	result := BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("ocr lost panel")}
@@ -173,11 +160,34 @@ func TestReaderController_OCRFailureSwitch(t *testing.T) {
 	if controller.reader() != pixel {
 		t.Error("readerController: reader should switch to pixel on failure")
 	}
-	if len(modeFns) == 0 || modeFns[len(modeFns)-1] != "Pixelsearch" {
-		t.Errorf("readerController: expected Pixelsearch mode, got %v", modeFns)
+	if len(sink.modes) == 0 || sink.modes[len(sink.modes)-1] != "Pixelsearch" {
+		t.Errorf("readerController: expected Pixelsearch mode, got %v", sink.modes)
+	}
+	if sink.clears != 1 {
+		t.Errorf("readerController: expected ClearValues on pixel switch, got %d", sink.clears)
 	}
 	if controller.nextOCRRetry.IsZero() {
 		t.Error("readerController: nextOCRRetry should be set")
+	}
+}
+
+func TestReaderController_InitialMode(t *testing.T) {
+	pixel := &pixelBarReader{}
+	ocr := &statusUIReader{}
+
+	mode, clear := newReaderController(ocr, pixel, ocr, false).initialMode()
+	if mode != "Searching..." || clear {
+		t.Errorf("OCR start: mode=%q clear=%t; want Searching... false", mode, clear)
+	}
+
+	mode, clear = newReaderController(pixel, pixel, nil, false).initialMode()
+	if mode != "Pixelsearch" || !clear {
+		t.Errorf("pixel start: mode=%q clear=%t; want Pixelsearch true", mode, clear)
+	}
+
+	mode, clear = newReaderController(nil, nil, nil, true).initialMode()
+	if mode != "Address reading" || clear {
+		t.Errorf("address start: mode=%q clear=%t; want Address reading false", mode, clear)
 	}
 }
 
@@ -218,11 +228,11 @@ func TestPotsEndedStep_DetectsEnded(t *testing.T) {
 
 func TestPotsEndedStep_Recovers(t *testing.T) {
 	h := &healer{}
-	modeCalls := []string{}
+	sink := &recordSink{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-			Log:            func(string) {},
-			OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
+			Log:    func(string) {},
+			Status: sink,
 		},
 	}
 	now := time.Now()
@@ -235,16 +245,19 @@ func TestPotsEndedStep_Recovers(t *testing.T) {
 	if hs.Before(now) {
 		t.Error("potsEndedStep: healStart should be reset to current time on recovery")
 	}
+	if len(sink.modes) == 0 || sink.modes[len(sink.modes)-1] != "" {
+		t.Errorf("potsEndedStep: expected empty mode on recovery, got %v", sink.modes)
+	}
 }
 
 func TestPotsEndedStep_ReAppliesLabel(t *testing.T) {
 	h := &healer{}
-	modeCalls := []string{}
+	sink := &recordSink{}
 	cfg := AutoPotConfig{
 		Core: CoreConfig{
-			Log:            func(string) {},
-			OnStatusUIMode: func(s string) { modeCalls = append(modeCalls, s) },
-			HPKeyName:      "F1",
+			Log:       func(string) {},
+			Status:    sink,
+			HPKeyName: "F1",
 		},
 	}
 	now := time.Now()
@@ -256,8 +269,8 @@ func TestPotsEndedStep_ReAppliesLabel(t *testing.T) {
 	if hs != now {
 		t.Error("potsEndedStep: healStart should not change when still ended")
 	}
-	if len(modeCalls) == 0 || modeCalls[len(modeCalls)-1] != "HP pots ended on F1" {
-		t.Errorf("potsEndedStep: expected HP pots ended on F1 mode, got %v", modeCalls)
+	if len(sink.modes) == 0 || sink.modes[len(sink.modes)-1] != "HP pots ended on F1" {
+		t.Errorf("potsEndedStep: expected HP pots ended on F1 mode, got %v", sink.modes)
 	}
 }
 

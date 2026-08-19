@@ -23,3 +23,22 @@ var EmergencyKeyDown = func(vk int32) bool { return false }
 
 // PollKeyToggle detects a rising edge on vk.
 var PollKeyToggle = func(wasDown *bool, vk int32) bool { return false }
+
+// PhysicalInput is the host keyboard the clicker and keychain poll.
+type PhysicalInput interface {
+	KeyDown(vk int32) bool
+	EmergencyDown(vk int32) bool
+	Swallow(vks []int32)
+	SetTapping(vk int32)
+}
+
+type hostKeyboard struct{}
+
+func (hostKeyboard) KeyDown(vk int32) bool       { return PhysicalKeyDown(vk) }
+func (hostKeyboard) EmergencyDown(vk int32) bool { return EmergencyKeyDown(vk) }
+func (hostKeyboard) Swallow(vks []int32)         { SwallowPhysicalKeys(vks) }
+func (hostKeyboard) SetTapping(vk int32)         { SetTappingVK(vk) }
+
+// HostKeyboard adapts the process-wide keyboard hooks. Tests that swap
+// PhysicalKeyDown and related vars still affect this adapter.
+func HostKeyboard() PhysicalInput { return hostKeyboard{} }

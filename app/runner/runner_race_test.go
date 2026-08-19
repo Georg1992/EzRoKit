@@ -21,8 +21,8 @@ func (m *mockSession) TapKey(vk int32, hold time.Duration) error {
 	return nil
 }
 
-func (m *mockSession) Reset() {}
-func (m *mockSession) TapCount() int64                  { return m.tapCount.Load() }
+func (m *mockSession) Reset()          {}
+func (m *mockSession) TapCount() int64 { return m.tapCount.Load() }
 
 // TestTimerKeyRunnerStress starts a real TimerKeyRunner (whose run() loop
 // calls session.TapKey on each enabled slot's interval), then hammers
@@ -107,7 +107,8 @@ func TestTimerKeyRunnerStress(t *testing.T) {
 func TestKeyChainRunnerStress(t *testing.T) {
 	sess := &mockSession{}
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			{
 				Keys:     [KeyChainSlotCount]int32{'A', 'B', 0, 0, 0, 0, 0},
@@ -133,7 +134,8 @@ func TestKeyChainRunnerStress(t *testing.T) {
 					return
 				default:
 					r.UpdateSettings(KeyChainConfig{
-						Session: sess,
+						Session:  sess,
+						Keyboard: HostKeyboard(),
 						Switches: [KeyChainCount]KeyChainSwitch{
 							{
 								Keys:     [KeyChainSlotCount]int32{int32('A' + rune(n%5)), 0, 0, 0, 0, 0, 0},
@@ -189,9 +191,10 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 	sess := &mockSession{}
 
 	clicker := New(Config{
-		Session: sess,
-		Log:     func(string) {},
-		Slots:   [ClickerSlotCount]ClickerSlot{},
+		Session:  sess,
+		Keyboard: HostKeyboard(),
+		Log:      func(string) {},
+		Slots:    [ClickerSlotCount]ClickerSlot{},
 	})
 	if err := clicker.Start(); err != nil {
 		t.Fatalf("clicker Start: %v", err)

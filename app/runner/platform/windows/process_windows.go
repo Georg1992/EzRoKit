@@ -4,6 +4,8 @@ package runner
 
 import (
 	"fmt"
+	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -15,8 +17,8 @@ var (
 	procKernel32                 = windows.NewLazySystemDLL("kernel32.dll")
 	procCreateToolhelp32Snapshot = procKernel32.NewProc("CreateToolhelp32Snapshot")
 	procOpenProcess              = procKernel32.NewProc("OpenProcess")
-	procReadProcessMemory         = procKernel32.NewProc("ReadProcessMemory")
-	procCloseHandle               = procKernel32.NewProc("CloseHandle")
+	procReadProcessMemory        = procKernel32.NewProc("ReadProcessMemory")
+	procCloseHandle              = procKernel32.NewProc("CloseHandle")
 
 	winUser32                     = windows.NewLazySystemDLL("user32.dll")
 	procEnumWindows               = winUser32.NewProc("EnumWindows")
@@ -39,7 +41,7 @@ type moduleEntry32 struct {
 	ProcessID    uint32
 	GlobalUsage  uint32
 	ProccntUsage uint32
-	ModBaseAddr  *byte  // base address of the module in the target process
+	ModBaseAddr  *byte // base address of the module in the target process
 	ModBaseSize  uint32
 	HModule      uintptr
 	SzModule     [256]uint16
@@ -86,42 +88,59 @@ func GetProcessBaseAddr(pid uint32) (uintptr, error) {
 	return uintptr(unsafe.Pointer(entry.ModBaseAddr)), nil
 }
 
-// FindVisibleWindowPID searches all visible top-level windows with non-empty
-// titles for one whose title contains the given substring. Returns the PID
-// of the first match, or 0 if none found.
-func FindVisibleWindowPID(title string) uint32 {
-	var foundPID uint32
-	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+// VisibleWindow is a top-level window with a non-empty title.
+type VisibleWindow struct {
+	Title string
+	PID   uint32
+}
 
+func enumVisibleWindows() []VisibleWindow {
+	var out []VisibleWindow
+	callback := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
 		visible, _, _ := procIsWindowVisible.Call(hwnd)
 		if visible == 0 {
 			return 1
 		}
-
 		length, _, _ := procGetWindowTextLengthW.Call(hwnd)
 		if length == 0 {
 			return 1
 		}
-
 		buf := make([]uint16, length+1)
 		procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(length+1))
-		winTitle := syscall.UTF16ToString(buf)
-		if winTitle == "" {
+		title := syscall.UTF16ToString(buf)
+		if title == "" {
 			return 1
 		}
-
-		// Check if the window title contains our target.
-		if strings.Contains(winTitle, title) {
-			var pid uint32
-			procGetWindowThreadProcessId2.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-			foundPID = pid
-			return 0 // stop enumeration
-		}
+		var pid uint32
+		procGetWindowThreadProcessId2.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		out = append(out, VisibleWindow{Title: title, PID: pid})
 		return 1
 	})
+	procEnumWindows.Call(callback, 0)
+	runtime.KeepAlive(callback)
+	return out
+}
 
-	procEnumWindows.Call(cb, 0)
-	return foundPID
+// ListVisibleWindows returns visible top-level windows with non-empty titles,
+// sorted by title.
+func ListVisibleWindows() []VisibleWindow {
+	windows := enumVisibleWindows()
+	sort.Slice(windows, func(i, j int) bool {
+		return windows[i].Title < windows[j].Title
+	})
+	return windows
+}
+
+// FindVisibleWindowPID searches visible top-level windows with non-empty
+// titles for one whose title contains the given substring. Returns the PID
+// of the first match in enumeration order, or 0 if none found.
+func FindVisibleWindowPID(title string) uint32 {
+	for _, w := range enumVisibleWindows() {
+		if strings.Contains(w.Title, title) {
+			return w.PID
+		}
+	}
+	return 0
 }
 
 // ReadProcessUint32ByHandle reads a 32-bit value from the target process
@@ -145,4 +164,3 @@ func ReadProcessUint32ByHandle(h windows.Handle, addr uintptr) (uint32, error) {
 	}
 	return val, nil
 }
-

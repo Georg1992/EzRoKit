@@ -26,12 +26,7 @@ func (a *guiApp) onStartViiper() {
 			a.viiperStartupCancel = nil
 			a.mu.Unlock()
 		}()
-		logFn := func(s string) {
-			if ctx.Err() != nil {
-				return
-			}
-			a.mainWindow.Synchronize(func() { a.appendLog(s) })
-		}
+		logFn := a.fileLog()
 
 		_, err := ensureViiperServer(ctx, logFn)
 		if err != nil {

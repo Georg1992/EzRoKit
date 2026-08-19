@@ -32,11 +32,17 @@ type BarReadResult struct {
 	SPLow  bool
 	Status BarReadStatus
 	Err    error
+
+	// Mode is an overlay label to apply for this result. Empty means
+	// leave the current mode unchanged.
+	Mode string
+	// Values is the overlay HP/SP snapshot. Nil means leave current values.
+	Values *OverlayValues
 }
 
 // BarReader produces HP/SP percentage readings. Two implementations exist:
-//   - pixelBarReader — colour-based bar detection (always-available fallback)
-//   - statusUIReader — OCR-based status panel reading (primary, higher precision)
+//   - pixelBarReader — colour-based bar detection (visual recovery reader)
+//   - statusUIReader — OCR-based status panel reading (visual primary)
 //
 // ReadValues blocks until a reading is available or ctx is cancelled.
 // Name returns a short identifier for the overlay mode label.
@@ -49,12 +55,11 @@ type BarReader interface {
 // pixel-based HP/SP reading. Tracks the last known bar position in
 // screen coordinates so the search ROI can follow camera drift.
 type pixelBarReader struct {
-	capture  screenCapturer
-	hpStab   *BarStabilizer
-	spStab   *BarStabilizer
-	log      func(string)
-	lastLog  time.Time
-	onParsed func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
+	capture screenCapturer
+	hpStab  *BarStabilizer
+	spStab  *BarStabilizer
+	log     func(string)
+	lastLog time.Time
 
 	// lastScreenRect is the last known HP bar position in screen
 	// coordinates. Used to centre the next search ROI so the detector
@@ -73,11 +78,7 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 		return BarReadResult{Status: StatusInvalid, Err: ctx.Err()}
 	}
 
-	capture := r.capture
-	if capture == nil {
-		capture = defaultScreenCapturer()
-	}
-	sw, sh := capture.ScreenSize()
+	sw, sh := r.capture.ScreenSize()
 	var rct Rect
 	if r.lastScreenRect.W > 0 && r.lostFrames < 3 {
 		// Centre the search ROI on the last known bar position so
@@ -97,7 +98,7 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 	}
 
 	roi := rct
-	img, err := capture.CaptureScreenRegion(rct)
+	img, err := r.capture.CaptureScreenRegion(rct)
 	if err != nil {
 		r.debugf("pixel: capture failed, roi %d,%d %dx%d: %v", roi.X, roi.Y, roi.W, roi.H, err)
 		return BarReadResult{Status: StatusInvalid, Err: err}
@@ -146,18 +147,16 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 		}
 	}
 
-	// Forward percentage values to overlay callback (hpMax=100, spMax=100
-	// signals to the overlay that these are percentages, not raw values).
-	if r.onParsed != nil {
-		r.onParsed(int(hp.Percent), 100, int(sp.Percent), 100, 0, 0, 0, 0)
-	}
-
 	return BarReadResult{
 		HP:     hp.Percent,
 		SP:     sp.Percent,
 		HPLow:  hp.Status == BarStatusLow,
 		SPLow:  sp.Status == BarStatusLow,
 		Status: StatusFound,
+		Values: &OverlayValues{
+			HP: int(hp.Percent), HPMax: 100,
+			SP: int(sp.Percent), SPMax: 100,
+		},
 	}
 }
 
@@ -177,16 +176,13 @@ func (r *pixelBarReader) debugf(format string, args ...interface{}) {
 }
 
 // statusUIReader wraps the StripPoller for OCR-based HP/SP reading.
-// It handles panel validation, debounced logging, overlay mode transitions,
-// and the OnStatusParsed overlay callback — all as side-effects of ReadValues.
-// The settings function provides access to live thresholds (which can change
-// via UpdateSettings mid-run) so HPLow/SPLow are computed correctly.
+// Overlay publishing is the runner's job: this type only returns Mode and
+// Values on BarReadResult. coreSettings supplies live heal thresholds.
 type statusUIReader struct {
 	capture       screenCapturer
 	poller        *statusui.StripPoller
 	wasPanelFound bool
-	onModeChange  func(string)
-	onParsed      func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
+	announceMode  string
 	log           func(string)
 	coreSettings  func() CoreConfig
 
@@ -215,7 +211,7 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 			// (capture timing, compositor update, or a single bad frame).
 			// Retry once before abandoning OCR and switching readers.
 			if retryErr := r.validate(); retryErr != nil {
-				return BarReadResult{Status: StatusNotFound, Err: retryErr}
+				return BarReadResult{Status: StatusNotFound, Err: retryErr, Mode: r.takeAnnounceMode()}
 			}
 		}
 	}
@@ -227,11 +223,11 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 		// doesn't have to switch to pixel on a single transient error.
 		r.poller.Invalidate()
 		if valErr := r.validate(); valErr != nil {
-			return BarReadResult{Status: StatusNotFound, Err: valErr}
+			return BarReadResult{Status: StatusNotFound, Err: valErr, Mode: r.takeAnnounceMode()}
 		}
 		status, err = r.captureAndParse()
 		if err != nil {
-			return BarReadResult{Status: StatusInvalid, Err: err}
+			return BarReadResult{Status: StatusInvalid, Err: err, Mode: r.takeAnnounceMode()}
 		}
 	}
 	status, ok := r.confirmMaxima(status)
@@ -242,7 +238,6 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 				r.hpMax, r.spMax, status.HPMax, status.SPMax),
 		}
 	}
-	r.notifyParsed(status)
 
 	hpPct := float64(status.HP) * 100 / float64(status.HPMax)
 	spPct := float64(status.SP) * 100 / float64(status.SPMax)
@@ -251,13 +246,22 @@ func (r *statusUIReader) ReadValues(ctx context.Context) BarReadResult {
 	if r.coreSettings != nil {
 		cfg = r.coreSettings()
 	}
-	return BarReadResult{
+	result := BarReadResult{
 		HP:     hpPct,
 		SP:     spPct,
 		HPLow:  hpPct < float64(cfg.HPThreshold),
 		SPLow:  spPct < float64(cfg.SPThreshold),
 		Status: StatusFound,
+		Values: overlayFromParsed(status, r.poller.PanelRect()),
+		Mode:   r.takeAnnounceMode(),
 	}
+	return result
+}
+
+func (r *statusUIReader) takeAnnounceMode() string {
+	mode := r.announceMode
+	r.announceMode = ""
+	return mode
 }
 
 // maxChangeConfirm is how many reads in a row must agree on new maxima before
@@ -356,11 +360,7 @@ func (r *statusUIReader) confirmCachedPanel() error {
 // avoid GUI spam on repeated retries. Screen capture failures
 // are logged once then suppressed until a successful capture.
 func (r *statusUIReader) searchForPanel() error {
-	capture := r.capture
-	if capture == nil {
-		capture = defaultScreenCapturer()
-	}
-	screen, err := capture.CaptureFullScreen()
+	screen, err := r.capture.CaptureFullScreen()
 	if err != nil {
 		if r.wasPanelFound && r.log != nil {
 			r.log(fmt.Sprintf("autopot statusui: screen capture failed: %v", err))
@@ -373,9 +373,7 @@ func (r *statusUIReader) searchForPanel() error {
 				r.log("autopot statusui: status panel lost, searching...")
 			}
 			r.wasPanelFound = false
-			if r.onModeChange != nil {
-				r.onModeChange("Searching...")
-			}
+			r.announceMode = "Searching..."
 		}
 		return err
 	}
@@ -384,9 +382,7 @@ func (r *statusUIReader) searchForPanel() error {
 			r.log("autopot statusui: status panel found")
 		}
 		r.wasPanelFound = true
-		if r.onModeChange != nil {
-			r.onModeChange("OCR")
-		}
+		r.announceMode = "OCR"
 	}
 	return nil
 }
@@ -408,26 +404,16 @@ func (r *statusUIReader) captureAndParse() (statusui.ParsedStatus, error) {
 }
 
 func (r *statusUIReader) captureRegion(rect image.Rectangle) (*image.RGBA, error) {
-	capture := r.capture
-	if capture == nil {
-		capture = defaultScreenCapturer()
-	}
-	return capture.CaptureScreenRegion(Rect{
+	return r.capture.CaptureScreenRegion(Rect{
 		X: rect.Min.X, Y: rect.Min.Y,
 		W: rect.Dx(), H: rect.Dy(),
 	})
 }
 
-func (r *statusUIReader) notifyParsed(s statusui.ParsedStatus) {
-	if r == nil || r.poller == nil || r.onParsed == nil {
-		return
+func overlayFromParsed(s statusui.ParsedStatus, panel image.Rectangle) *OverlayValues {
+	return &OverlayValues{
+		HP: s.HP, HPMax: s.HPMax, SP: s.SP, SPMax: s.SPMax,
+		PanelX: panel.Min.X, PanelY: panel.Min.Y,
+		PanelW: panel.Dx(), PanelH: panel.Dy(),
 	}
-	panel := r.poller.PanelRect()
-	if panel.Empty() {
-		// Fallback to strip rect if panel not yet available.
-		strip := r.poller.StripRect()
-		r.onParsed(s.HP, s.HPMax, s.SP, s.SPMax, strip.Min.X, strip.Min.Y, strip.Dx(), strip.Dy())
-		return
-	}
-	r.onParsed(s.HP, s.HPMax, s.SP, s.SPMax, panel.Min.X, panel.Min.Y, panel.Dx(), panel.Dy())
 }

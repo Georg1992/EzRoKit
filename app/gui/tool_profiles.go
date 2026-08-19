@@ -202,6 +202,9 @@ func (a *guiApp) onToolProfileSelected() {
 	if idx < 0 || idx >= len(a.profiles.saved)+1 {
 		return
 	}
+	if idx == a.profiles.activeIndex {
+		return
+	}
 	a.profiles.activeIndex = idx
 	if a.profiles.removeBtn != nil {
 		a.profiles.removeBtn.SetEnabled(idx > 0)
@@ -327,6 +330,7 @@ func (a *guiApp) captureToolProfile(name string) toolProfile {
 func (a *guiApp) applyToolProfile(profile toolProfile) {
 	normalizeToolProfile(&profile)
 	a.profileApplying = true
+	a.autopot.suppressWindowEvents = true
 	a.clicker.visibleCount = profile.Clicker.VisibleCount
 	for i := 0; i < runner.ClickerSlotCount; i++ {
 		a.clicker.triggerVKs[i] = profile.Clicker.Slots[i].TriggerVKs
@@ -369,7 +373,7 @@ func (a *guiApp) applyToolProfile(profile toolProfile) {
 	a.autopot.selectProfileByName(profile.AutoPot.AddressProfile)
 	windowIndex := -1
 	for i, window := range a.autopot.windowList {
-		if window.title == profile.AutoPot.WindowTitle {
+		if window.Title == profile.AutoPot.WindowTitle {
 			windowIndex = i
 			break
 		}
@@ -392,13 +396,13 @@ func (a *guiApp) applyToolProfile(profile toolProfile) {
 	a.updateKeyChainAddButton()
 	a.updateKeyChainRemoveButtons()
 	a.profileApplying = false
-
-	// Apply once more after all controls have been updated. This restarts or
-	// updates live tools as necessary, without reacting to half a profile.
 	a.syncRunnerSettings()
 	a.syncAutoPotSettings()
 	a.syncTimerKeySettings()
 	a.syncKeyChainSettings()
+	a.mainWindow.Synchronize(func() {
+		a.autopot.suppressWindowEvents = false
+	})
 }
 
 func (a *guiApp) intervalSeconds(index int) int {

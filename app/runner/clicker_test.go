@@ -66,7 +66,8 @@ func TestClicker_AlwaysEmitsKeyThenMouse(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
@@ -123,7 +124,8 @@ func TestClicker_ReleaseSendsKeyUp(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
@@ -178,7 +180,8 @@ func TestClicker_SecondBindWaitsForFirstCycle(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1000, MouseClick: false},
 			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: false},
@@ -219,7 +222,8 @@ func TestClicker_HeldBindIgnoresLaterTrigger(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: false},
 			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: false},
@@ -267,7 +271,8 @@ func TestClicker_UnboundPhysicalKeyDoesNotInterruptTrigger(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: false},
 		},
@@ -331,7 +336,8 @@ func TestClicker_NeverEmitsTwoMiceInARow(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 			{TriggerVKs: [ClickerKeysPerBind]int32{'T'}, DelayMs: 5, MouseClick: true},
@@ -404,7 +410,8 @@ func TestClicker_ReleasedTriggerStopsImmediately(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
@@ -456,7 +463,8 @@ func TestClicker_EmergencyToggleStopsRunawayClicker(t *testing.T) {
 
 	sess := &clickerTestSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
@@ -495,7 +503,8 @@ func TestClicker_FailedKeyDoesNotEmitMouse(t *testing.T) {
 
 	sess := &clickerTestSession{failKeys: true}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
@@ -571,25 +580,18 @@ func TestClicker_MouseClickRequiresCycleSession(t *testing.T) {
 
 	sess := &splitOnlySession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 5, MouseClick: true},
 		},
 		Log: func(string) {},
 	})
-	if err := r.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for r.Running() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if r.Running() {
+	if err := r.Start(); err == nil {
 		r.Stop()
 		r.Wait()
-		t.Fatal("clicker kept running without a cycle-capable session")
+		t.Fatal("Start succeeded without a cycle-capable session")
 	}
-	r.Wait()
 	if sess.keys != 0 {
 		t.Fatalf("session that cannot click still received keys: keys=%d", sess.keys)
 	}

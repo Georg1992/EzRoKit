@@ -25,9 +25,6 @@ func NewReaderFactory(settings func() AutoPotConfig, hpStab, spStab *BarStabiliz
 // source. Production callers normally use NewReaderFactory; tests and other
 // hosts can provide deterministic frames without replacing package globals.
 func NewReaderFactoryWithCapture(settings func() AutoPotConfig, hpStab, spStab *BarStabilizer, capture screenCapturer) *ReaderFactory {
-	if capture == nil {
-		capture = defaultScreenCapturer()
-	}
 	return &ReaderFactory{
 		settings: settings,
 		capture:  capture,
@@ -36,82 +33,65 @@ func NewReaderFactoryWithCapture(settings func() AutoPotConfig, hpStab, spStab *
 	}
 }
 
-// Build creates the primary BarReader, the pixel fallback, and the OCR
-// reader (nil if OCR is unavailable or in address mode).
+// Build creates the primary BarReader plus the visual recovery pair.
+//
+// Address mode always returns an address reader. Visual mode returns OCR as
+// primary when the embedded pipeline loads, with the pixel reader used for
+// runtime recovery if the status panel is lost.
 //
 // Returns:
 //   - primary: the active BarReader
-//   - fallback: pixel reader for OCR→pixel fallback; nil in address mode
+//   - pixel: pixel reader for OCR recovery; nil in address mode
 //   - ocr: OCR reader for pixel→OCR recovery; nil if unavailable
-//   - isAddress: true only when address reading is active (false after visual fallback)
-func (f *ReaderFactory) Build() (primary BarReader, fallback *pixelBarReader, ocr *statusUIReader, isAddress bool) {
+//   - isAddress: true when address reading is the selected mode
+func (f *ReaderFactory) Build() (primary BarReader, pixel *pixelBarReader, ocr *statusUIReader, isAddress bool) {
 	cfg := f.settings()
 	if cfg.IsAddressMode() {
-		reader, err := f.buildAddressReader(cfg)
-		if err != nil {
-			cfg.Core.Log("autopot: " + err.Error() + " — falling back to Visual mode")
-			primary, fallback, ocr = f.buildVisualReaders(cfg)
-			return primary, fallback, ocr, false
-		}
-		setMode(cfg.Core.OnStatusUIMode, "Address reading")
-		return reader, nil, nil, true
+		return f.buildAddressReader(cfg), nil, nil, true
 	}
-	primary, fallback, ocr = f.buildVisualReaders(cfg)
-	return primary, fallback, ocr, false
+	primary, pixel, ocr = f.buildVisualReaders(cfg)
+	return primary, pixel, ocr, false
 }
 
-// buildVisualReaders creates pixel + optional OCR readers for visual mode.
 func (f *ReaderFactory) buildVisualReaders(cfg AutoPotConfig) (primary BarReader, fallback *pixelBarReader, ocr *statusUIReader) {
 	pixel := f.buildPixelReader(cfg)
 	if ocr, ok := f.tryBuildOCRReader(cfg); ok {
-		setMode(cfg.Core.OnStatusUIMode, "Searching...")
 		return ocr, pixel, ocr
-	}
-	setMode(cfg.Core.OnStatusUIMode, "Pixelsearch")
-	if cfg.Core.OnStatusParsed != nil {
-		cfg.Core.OnStatusParsed(pixelModeSentinel, 0, pixelModeSentinel, 0, 0, 0, 0, 0)
 	}
 	return pixel, pixel, nil
 }
 
 func (f *ReaderFactory) buildPixelReader(cfg AutoPotConfig) *pixelBarReader {
 	return &pixelBarReader{
-		capture:  f.capture,
-		hpStab:   f.hpStab,
-		spStab:   f.spStab,
-		log:      cfg.Core.Log,
-		onParsed: cfg.Core.OnStatusParsed,
+		capture: f.capture,
+		hpStab:  f.hpStab,
+		spStab:  f.spStab,
+		log:     cfg.Core.Log,
 	}
 }
 
 func (f *ReaderFactory) tryBuildOCRReader(cfg AutoPotConfig) (*statusUIReader, bool) {
 	pipeline, err := statusui.NewDefaultPipeline()
 	if err != nil {
+		if cfg.Core.Log != nil {
+			cfg.Core.Log("autopot: OCR pipeline unavailable: " + err.Error())
+		}
 		return nil, false
 	}
 	return &statusUIReader{
 		capture:      f.capture,
 		poller:       statusui.NewStripPoller(pipeline),
-		onModeChange: cfg.Core.OnStatusUIMode,
-		onParsed:     cfg.Core.OnStatusParsed,
 		log:          cfg.Core.Log,
 		coreSettings: func() CoreConfig { return f.settings().Core },
 	}, true
 }
 
-func (f *ReaderFactory) buildAddressReader(cfg AutoPotConfig) (*addressReader, error) {
-	baseAddr, err := GetProcessBaseAddr(cfg.Address.ProcessPID)
-	if err != nil {
-		return nil, err
-	}
+func (f *ReaderFactory) buildAddressReader(cfg AutoPotConfig) *addressReader {
 	return &addressReader{
 		pid:          cfg.Address.ProcessPID,
 		profile:      cfg.Address.Profile,
 		processTitle: cfg.Address.ProcessTitle,
-		moduleBase:   baseAddr,
 		log:          cfg.Core.Log,
 		thresholdFn:  func() (hpThresh, spThresh int) { c := f.settings().Core; return c.HPThreshold, c.SPThreshold },
-		onParsed:     cfg.Core.OnStatusParsed,
-		onModeChange: cfg.Core.OnStatusUIMode,
-	}, nil
+	}
 }

@@ -28,9 +28,10 @@ type ClickerSlot struct {
 }
 
 type Config struct {
-	Session session.InputSession
-	Log     func(string)
-	Slots   [ClickerSlotCount]ClickerSlot
+	Session  session.InputSession
+	Keyboard PhysicalInput
+	Log      func(string)
+	Slots    [ClickerSlotCount]ClickerSlot
 }
 
 type Runner struct {
@@ -44,12 +45,7 @@ func New(cfg Config) *Runner {
 	r := &Runner{}
 	r.lc = lifecycle.New[Config](
 		cfg,
-		func(c Config) error {
-			if c.Session == nil {
-				return fmt.Errorf("input session is required")
-			}
-			return nil
-		},
+		validateClickerConfig,
 		nil,
 	)
 	return r
@@ -61,6 +57,30 @@ func (r *Runner) UpdateSettings(slots [ClickerSlotCount]ClickerSlot) {
 	cfg := r.lc.Settings()
 	cfg.Slots = slots
 	r.lc.UpdateSettings(cfg)
+}
+
+func validateClickerConfig(c Config) error {
+	if c.Session == nil {
+		return fmt.Errorf("input session is required")
+	}
+	if c.Keyboard == nil {
+		return fmt.Errorf("keyboard is required")
+	}
+	if needsClickerCycle(c.Slots) {
+		if _, ok := c.Session.(session.ClickerInputSession); !ok {
+			return fmt.Errorf("input session cannot run a clicker cycle")
+		}
+	}
+	return nil
+}
+
+func needsClickerCycle(slots [ClickerSlotCount]ClickerSlot) bool {
+	for i := range slots {
+		if slots[i].MouseClick {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) settings() Config { return r.lc.Settings() }
@@ -96,11 +116,11 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 	defer r.settings().Session.Reset()
 	var heldVK int32
 	for ctx.Err() == nil {
-		if emergencyDown() {
+		current := r.settings()
+		if emergencyDown(current.Keyboard) {
 			return
 		}
 
-		current := r.settings()
 		vk, slot, ok := heldTrigger(current, heldVK)
 		if !ok {
 			if heldVK != 0 {
@@ -112,11 +132,11 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 		}
 		heldVK = vk
 
-		if err := r.fireCycle(current.Session, slot, vk); err != nil {
+		if err := r.fireCycle(current.Session, current.Keyboard, slot, vk); err != nil {
 			current.Log(fmt.Sprintf("clicker stopped: %v", err))
 			return
 		}
-		sleepCycleDelay(ctx, slotDelay(slot), vk)
+		sleepCycleDelay(ctx, slotDelay(slot), vk, current.Keyboard)
 	}
 }
 
@@ -124,7 +144,7 @@ func (r *Runner) run(ctx context.Context, _ Config) {
 // Other keys and a second bind cannot take over mid-hold.
 func heldTrigger(current Config, heldVK int32) (int32, ClickerSlot, bool) {
 	if heldVK != 0 {
-		if !PhysicalKeyDown(heldVK) {
+		if !current.Keyboard.KeyDown(heldVK) {
 			return 0, ClickerSlot{}, false
 		}
 		if slot, ok := slotForTrigger(current, heldVK); ok {
@@ -139,7 +159,7 @@ func firstHeldTrigger(current Config) (int32, ClickerSlot, bool) {
 	for bi := range current.Slots {
 		slot := current.Slots[bi]
 		for _, vk := range slot.TriggerVKs {
-			if vk != 0 && PhysicalKeyDown(vk) {
+			if vk != 0 && current.Keyboard.KeyDown(vk) {
 				return vk, slot, true
 			}
 		}
@@ -159,19 +179,19 @@ func slotForTrigger(current Config, vk int32) (ClickerSlot, bool) {
 	return ClickerSlot{}, false
 }
 
-func emergencyDown() bool {
+func emergencyDown(kb PhysicalInput) bool {
 	for _, vk := range timing.ToggleVKs {
-		if EmergencyKeyDown(vk) {
+		if kb.EmergencyDown(vk) {
 			return true
 		}
 	}
 	return false
 }
 
-func sleepCycleDelay(ctx context.Context, d time.Duration, vk int32) {
+func sleepCycleDelay(ctx context.Context, d time.Duration, vk int32, kb PhysicalInput) {
 	deadline := time.Now().Add(d)
 	for ctx.Err() == nil && time.Now().Before(deadline) {
-		if emergencyDown() || !PhysicalKeyDown(vk) {
+		if emergencyDown(kb) || !kb.KeyDown(vk) {
 			return
 		}
 		wait := time.Until(deadline)
@@ -184,8 +204,8 @@ func sleepCycleDelay(ctx context.Context, d time.Duration, vk int32) {
 
 // fireCycle sends one cycle. Whether a cycle may run at all is decided here, by
 // the physical hold; the session itself only decides what the game receives.
-func (r *Runner) fireCycle(sess session.InputSession, slot ClickerSlot, vk int32) error {
-	if !PhysicalKeyDown(vk) {
+func (r *Runner) fireCycle(sess session.InputSession, kb PhysicalInput, slot ClickerSlot, vk int32) error {
+	if !kb.KeyDown(vk) {
 		return nil
 	}
 	if !slot.MouseClick {

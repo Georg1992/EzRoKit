@@ -4,7 +4,6 @@ import (
 	"errors"
 	"image"
 	"sort"
-	"time"
 )
 
 const (
@@ -61,12 +60,11 @@ type ColorRun struct {
 
 // MappedBars holds the detected HP and SP bar rectangles and metadata.
 type MappedBars struct {
-	Block      Rect
-	HP         Rect
-	SP         Rect
-	Valid      bool
-	MapScore   int
-	LastMapped time.Time
+	Block    Rect
+	HP       Rect
+	SP       Rect
+	Valid    bool
+	MapScore int
 }
 
 // RefreshBarPair locates the player HP/SP colored-run pair near screen center.
@@ -89,19 +87,16 @@ func RefreshBarPair(img image.Image) (MappedBars, error) {
 	block := unionRect(hpRect, spRect)
 
 	return MappedBars{
-		Block:      block,
-		HP:         hpRect,
-		SP:         spRect,
-		Valid:      true,
-		MapScore:   score,
-		LastMapped: time.Now(),
+		Block:    block,
+		HP:       hpRect,
+		SP:       spRect,
+		Valid:    true,
+		MapScore: score,
 	}, nil
 }
 
-// RefreshConsistentBarPair calls RefreshBarPair once and returns the result.
-// The algorithm is fully deterministic (consolidateRuns sorts its output), so
-// a second call on the same image would always produce the same result.
-// Exported (uppercase) so the runner package can re-export it for tests.
+// RefreshConsistentBarPair locates the player HP/SP pair and reports whether
+// the detection succeeded. The algorithm is deterministic for a given image.
 func RefreshConsistentBarPair(img image.Image) (MappedBars, bool) {
 	mapped, err := RefreshBarPair(img)
 	if err != nil {
@@ -154,10 +149,66 @@ func PlayerBarSearchROI(sw, sh int) Rect {
 // A "run" is a contiguous horizontal sequence of pixels matching the provided color test.
 // Returns all runs >= minRunWidth, with small gaps (<=runGapMerge pixels) automatically merged.
 func scanColorRuns(img image.Image, roi Rect, isPixel func(r, g, b uint8) bool, colorKind string) []ColorRun {
+	if rgba, ok := img.(*image.RGBA); ok {
+		var runs []ColorRun
+		for y := roi.Y; y < roi.Y+roi.H; y++ {
+			runs = append(runs, extractRowRunsRGBA(rgba, y, roi.X, roi.X+roi.W, isPixel, colorKind)...)
+		}
+		return runs
+	}
 	var runs []ColorRun
 	for y := roi.Y; y < roi.Y+roi.H; y++ {
 		runs = append(runs, extractRowRuns(img, y, roi.X, roi.X+roi.W, isPixel, colorKind)...)
 	}
+	return runs
+}
+
+func extractRowRunsRGBA(img *image.RGBA, y, x0, x1 int, isPixel func(r, g, b uint8) bool, colorKind string) []ColorRun {
+	if x0 >= x1 {
+		return nil
+	}
+	var runs []ColorRun
+	runStart := -1
+	runEnd := -1
+	gap := 0
+	rowOff := img.PixOffset(x0, y)
+	pix := img.Pix
+
+	flush := func() {
+		if runStart < 0 {
+			return
+		}
+		w := runEnd - runStart + 1
+		if w >= minRunWidth {
+			runs = append(runs, ColorRun{
+				X1: runStart, X2: runEnd, Y: y, Width: w, Color: colorKind,
+			})
+		}
+		runStart = -1
+		runEnd = -1
+		gap = 0
+	}
+
+	off := rowOff
+	for x := x0; x < x1; x++ {
+		if isPixel(pix[off], pix[off+1], pix[off+2]) {
+			if runStart < 0 {
+				runStart = x
+			}
+			runEnd = x
+			gap = 0
+			off += 4
+			continue
+		}
+		if runStart >= 0 {
+			gap++
+			if gap > runGapMerge {
+				flush()
+			}
+		}
+		off += 4
+	}
+	flush()
 	return runs
 }
 
@@ -270,7 +321,7 @@ func findPlayerBarPair(hpRuns, spRuns []ColorRun, roi Rect, cx, cy int) (hp, sp 
 		}
 	}
 
-		if hasPair {
+	if hasPair {
 		// Verify vertical bar structure: each detected run must have at
 		// least one adjacent row with an overlapping run (real bars have
 		// barRowHeight=3 rows of fill; single-row artifacts are desktop noise).
@@ -497,7 +548,8 @@ func deriveBarRects(img image.Image, hpRun, spRun ColorRun) (hp, sp Rect) {
 		w = hpRun.Width
 		if spRun.Width > w {
 			w = spRun.Width
-		}	}
+		}
+	}
 	if w > maxBarWidth {
 		w = maxBarWidth
 	}

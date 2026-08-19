@@ -53,7 +53,8 @@ func startKeyChain(t *testing.T, sess *keychainSession, sw KeyChainSwitch) *KeyC
 	t.Helper()
 	stubSwallowKeys(t, func([]int32) {})
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			sw,
 		},
@@ -179,7 +180,8 @@ func TestKeyChain_HeldSwitchIgnoresLaterTrigger(t *testing.T) {
 
 	sess := &keychainSession{}
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			{Keys: [KeyChainSlotCount]int32{'D', 'A'}, DelaysMs: [KeyChainSlotCount]int{5, 0}},
 			{Keys: [KeyChainSlotCount]int32{'T', 'B'}, DelaysMs: [KeyChainSlotCount]int{5, 0}},
@@ -228,8 +230,8 @@ func TestKeyChain_RepeatedKeysIncludingTrigger(t *testing.T) {
 	stubPhysicalKey(t, func(vk int32) bool { return vk == '1' })
 
 	sess := &keychainSession{}
-	k := NewKeyChain(KeyChainConfig{Session: sess, Log: func(string) {}})
-	err := k.executeChain(context.Background(), sess, KeyChainSwitch{
+	k := NewKeyChain(KeyChainConfig{Session: sess, Keyboard: HostKeyboard(), Log: func(string) {}})
+	err := k.executeChain(context.Background(), sess, HostKeyboard(), KeyChainSwitch{
 		Keys: [KeyChainSlotCount]int32{'1', '2', '1', '3', '1', '4'},
 	})
 	if err != nil {
@@ -251,8 +253,8 @@ func TestKeyChain_ExecuteChainSendsEveryKey(t *testing.T) {
 	stubPhysicalKey(t, func(vk int32) bool { return vk == 'A' })
 
 	sess := &keychainSession{}
-	k := NewKeyChain(KeyChainConfig{Session: sess, Log: func(string) {}})
-	err := k.executeChain(context.Background(), sess, KeyChainSwitch{
+	k := NewKeyChain(KeyChainConfig{Session: sess, Keyboard: HostKeyboard(), Log: func(string) {}})
+	err := k.executeChain(context.Background(), sess, HostKeyboard(), KeyChainSwitch{
 		Keys: [KeyChainSlotCount]int32{'A', 'B', 'C'},
 	})
 	if err != nil {
@@ -269,7 +271,8 @@ func TestKeyChain_StopCancelsScheduledSleep(t *testing.T) {
 
 	sess := &keychainSession{}
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			{Keys: [KeyChainSlotCount]int32{'T', 'A'}, DelaysMs: [KeyChainSlotCount]int{1000, 0}},
 		},
@@ -310,7 +313,8 @@ func TestKeyChain_EmergencyToggleStopsRunawayChain(t *testing.T) {
 
 	sess := &keychainSession{}
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			{Keys: [KeyChainSlotCount]int32{'T', 'A'}, DelaysMs: [KeyChainSlotCount]int{5, 0}},
 		},
@@ -368,7 +372,7 @@ func TestKeyChain_TapChainKeyMarksTappingVK(t *testing.T) {
 	t.Cleanup(func() { SetTappingVK = orig })
 
 	sess := &keychainSession{}
-	if err := tapChainKey(sess, '1'); err != nil {
+	if err := tapChainKey(sess, HostKeyboard(), '1'); err != nil {
 		t.Fatalf("tapChainKey: %v", err)
 	}
 	mu.Lock()
@@ -394,7 +398,8 @@ func TestKeyChain_SwallowsTriggerWhileRunning(t *testing.T) {
 
 	sess := &keychainSession{}
 	r := NewKeyChain(KeyChainConfig{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Switches: [KeyChainCount]KeyChainSwitch{
 			{Keys: [KeyChainSlotCount]int32{'1', '2', '1'}},
 		},

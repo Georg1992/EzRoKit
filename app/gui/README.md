@@ -19,7 +19,7 @@ sibling packages.
 │  ViiperSession, InputSession, OpenViiperSession,           │
 │  timing constants (PollInterval, KeyBindTimeout, ...),      │
 │  slot counts (ClickerSlotCount, KeyChainSlotCount, ...),    │
-│  KeyBindTimeout, WaitForKeyPress, KeyName, VKToHID, ...     │
+│  KeyBindTimeout, WaitForKeyPressContext, KeyName, VKToHID, ...     │
 └────────────────────────┬────────────────────────────────────┘
                          │ imports
                          ▼
@@ -40,6 +40,7 @@ It must never import any of the internal subpackages directly:
 - ❌ `ezrokit/runner/autopot/statusui`
 - ❌ `ezrokit/runner/internal/...`
 - ❌ `ezrokit/runner/platform/...`
+- ❌ `ezrokit/runner/profiles`
 
 If you find yourself wanting to import one of these, you have hit a
 genuine API gap. **Add the missing surface to `runner` first**, then
@@ -63,10 +64,11 @@ import it from the GUI. The internal packages can move freely
 | File | Role |
 |---|---|
 | `main.go` | `guiApp` struct, `main()`, shutdown, tool lifecycle |
-| `logging.go` | Persistent GUI log, bounded log model, and log-trimmer lifecycle |
+| `logging.go` | UI log (casual-user messages) vs file-only diagnostics |
 | `viiper_lifecycle.go` | Cancellable VIIPER startup and session wiring |
 | `control_panel.go` | Top Start/Stop buttons + status badge + tool profiles |
 | `tool_profiles.go` | Persistent profiles for all tool bindings and settings |
+| `tools_host.go` | Shared start/stop registry for the four tool runners |
 | `clicker_tab.go` | Clicker slot rows, trigger-key binding, delay config |
 | `autopot_tab.go` | HP/SP enable, threshold, hotkey binding |
 | `keychain_tab.go` | KeyChain slot rows + hotkey binding |
@@ -74,6 +76,10 @@ import it from the GUI. The internal packages can move freely
 | `runner_control.go` | Shared helpers: `makeLifecycleSlot`, `startLifecycle`, `bindKeyFlow` |
 | `server.go` | Embedded VIIPER HTTP server start/stop |
 | `status_badge.go` | Stopped/Running pill widget |
+| `viiper_badge.go` | VIIPER server status badge |
+| `viiper_monitor.go` | VIIPER server health monitor |
+| `overlay_windows.go` | On-screen HP/SP status overlay |
+| `window_enum.go` | Visible-window picker for AutoPot address mode |
 | `keychain_arrows.go` | Arrow icons on the KeyChain tab |
 | `branding.go` | EzRoKit window icon |
 | `style.go` | Shared styling: gray hints, aligned labels, fixed-width buttons |
@@ -101,12 +107,5 @@ intact:
 
 ```bash
 # Should print nothing.
-grep -rn 'ezrokit/runner/' --include='*.go' app/gui/ \
-  | grep -v 'ezrokit/runner"' \
-  | grep -v 'ezrokit/runner/auto' \
-  | grep -v 'ezrokit/runner/status' \
-  | grep -v 'ezrokit/runner/internal' \
-  | grep -v 'ezrokit/runner/platform'
+grep -rn 'ezrokit/runner/' --include='*.go' app/gui/ | grep -v 'ezrokit/runner"'
 ```
-
-(Replace the grep with the exact import paths you forbid.)

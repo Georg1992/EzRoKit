@@ -67,7 +67,8 @@ func TestClicker_FlowHasNoExtraActionBetweenMouseAndSleep(t *testing.T) {
 
 	sess := &cycleClickerSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 25, MouseClick: true},
 		},
@@ -130,7 +131,8 @@ func TestClicker_NoCycleStartsAfterTheHoldDrops(t *testing.T) {
 
 	sess := &cycleClickerSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1, MouseClick: true},
 		},
@@ -170,7 +172,8 @@ func TestClicker_CycleCannotBeInterleavedByAnotherRunner(t *testing.T) {
 
 	sess := &cycleClickerSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1, MouseClick: true},
 		},
@@ -222,7 +225,8 @@ func TestClicker_StopCancelsScheduledSleep(t *testing.T) {
 
 	sess := &cycleClickerSession{}
 	r := New(Config{
-		Session: sess,
+		Session:  sess,
+		Keyboard: HostKeyboard(),
 		Slots: [ClickerSlotCount]ClickerSlot{
 			{TriggerVKs: [ClickerKeysPerBind]int32{'D'}, DelayMs: 1000, MouseClick: true},
 		},

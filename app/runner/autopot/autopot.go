@@ -46,18 +46,15 @@ func (a *AutoPotRunner) Running() bool { return a.lc.Running() }
 
 // UpdateSettings propagates new settings to the stabilisers.
 //
-// IMPORTANT: Log, OnStatusParsed, OnStatusUIMode, and Session are
-// preserved from the existing config. The GUI layer passes bare
-// callbacks (a.appendLog, a.onStatusParsed) without Synchronize;
-// the initial startup replaces them with Synchronize-wrapped
-// versions. We must keep those wrappers so UI calls from the
-// autopot goroutine always marshal to the GUI thread.
+// IMPORTANT: Log, Status, and Session are preserved from the existing
+// config. The GUI layer installs a Synchronize-wrapped StatusSink at
+// start; later setting updates must keep that sink so overlay calls
+// from the autopot goroutine stay on the GUI thread.
 func (a *AutoPotRunner) UpdateSettings(cfg AutoPotConfig) {
 	old := a.settings()
 	cfg.Core.Log = old.Core.Log
 	cfg.applyDefaults()
-	cfg.Core.OnStatusParsed = old.Core.OnStatusParsed
-	cfg.Core.OnStatusUIMode = old.Core.OnStatusUIMode
+	cfg.Core.Status = old.Core.Status
 	cfg.Core.Session = old.Core.Session
 	a.lc.UpdateSettings(cfg)
 	a.hpStabilizer.SetThreshold(cfg.Core.HPThreshold)
@@ -95,10 +92,19 @@ func (a *AutoPotRunner) run(ctx context.Context, _ AutoPotConfig) {
 	a.mainLoop(ctx, reader, pixel, ocr, isAddress)
 }
 
+func (a *AutoPotRunner) publishInitialMode(cfg AutoPotConfig, controller *readerController) {
+	mode, clear := controller.initialMode()
+	setMode(cfg.Core.Status, mode)
+	if clear && cfg.Core.Status != nil {
+		cfg.Core.Status.ClearValues()
+	}
+}
+
 // mainLoop owns only the high-level decision order: read one coherent HP/SP
 // snapshot, heal HP first, then SP, and maintain the normal poll cadence.
 func (a *AutoPotRunner) mainLoop(ctx context.Context, reader BarReader, pixel *pixelBarReader, ocr *statusUIReader, isAddress bool) {
 	controller := newReaderController(reader, pixel, ocr, isAddress)
+	a.publishInitialMode(a.settings(), controller)
 	for {
 		select {
 		case <-ctx.Done():
@@ -113,6 +119,7 @@ func (a *AutoPotRunner) mainLoop(ctx context.Context, reader BarReader, pixel *p
 		}
 
 		result := controller.reader().ReadValues(ctx)
+		publishStatus(cfg.Core.Status, result)
 		if !controller.process(ctx, cfg, result) {
 			if controller.isAddress() {
 				timing.Sleep(ctx, timing.PollInterval)

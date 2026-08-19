@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"ezrokit/runner"
-	"ezrokit/runner/profiles"
 	"github.com/lxn/walk"
 )
 
@@ -30,7 +29,7 @@ type autopotController struct {
 	windowRefreshBtn *walk.PushButton
 	profileCB        *walk.ComboBox
 	processPID       uint32
-	windowList       []windowInfo
+	windowList       []runner.VisibleWindow
 
 	hpKeyVK     int32
 	spKeyVK     int32
@@ -38,6 +37,7 @@ type autopotController struct {
 	spThreshold int
 
 	isRefreshingWindows    bool
+	suppressWindowEvents   bool
 	prevAutoPotAddressMode bool
 }
 
@@ -45,17 +45,17 @@ func (c *autopotController) isAddressMode() bool {
 	return c.autopotAddressRB != nil && c.autopotAddressRB.Checked()
 }
 
-func (c *autopotController) selectedProfile() profiles.Profile {
-	all := profiles.All()
+func (c *autopotController) selectedProfile() runner.Profile {
+	all := runner.AllProfiles()
 	idx := c.profileCB.CurrentIndex()
 	if idx >= 0 && idx < len(all) {
 		return all[idx]
 	}
-	return profiles.Default()
+	return runner.DefaultProfile()
 }
 
 func (c *autopotController) selectProfileByName(name string) {
-	all := profiles.All()
+	all := runner.AllProfiles()
 	for i, profile := range all {
 		if profile.Name == name {
 			c.profileCB.SetCurrentIndex(i)
@@ -72,7 +72,7 @@ func (c *autopotController) selectedWindowTitle() string {
 	if idx < 0 || idx >= len(c.windowList) {
 		return ""
 	}
-	return c.windowList[idx].title
+	return c.windowList[idx].Title
 }
 
 func (c *autopotController) parseThreshold(edit *walk.LineEdit) (int, bool) {
@@ -86,7 +86,7 @@ func (c *autopotController) parseThreshold(edit *walk.LineEdit) (int, bool) {
 	return v, true
 }
 
-func (c *autopotController) config(modeFn func(string), statusFn func(int, int, int, int, int, int, int, int), logFn func(string)) runner.AutoPotConfig {
+func (c *autopotController) config(status runner.StatusSink, logFn func(string)) runner.AutoPotConfig {
 	hpName := ""
 	if c.hpKeyVK != 0 {
 		hpName = runner.KeyName(c.hpKeyVK)
@@ -99,20 +99,19 @@ func (c *autopotController) config(modeFn func(string), statusFn func(int, int, 
 	profile := c.selectedProfile()
 	cfg := runner.AutoPotConfig{
 		Core: runner.CoreConfig{
-			HPThreshold:    c.hpThreshold,
-			SPThreshold:    c.spThreshold,
-			HPKeyVK:        c.hpKeyVK,
-			SPKeyVK:        c.spKeyVK,
-			HPKeyName:      hpName,
-			SPKeyName:      spName,
-			HPEnabled:      c.hpEnabledCB.Checked(),
-			SPEnabled:      c.spEnabledCB.Checked(),
-			Log:            logFn,
-			OnStatusParsed: statusFn,
-			OnStatusUIMode: modeFn,
+			HPThreshold: c.hpThreshold,
+			SPThreshold: c.spThreshold,
+			HPKeyVK:     c.hpKeyVK,
+			SPKeyVK:     c.spKeyVK,
+			HPKeyName:   hpName,
+			SPKeyName:   spName,
+			HPEnabled:   c.hpEnabledCB.Checked(),
+			SPEnabled:   c.spEnabledCB.Checked(),
+			Log:         logFn,
+			Status:      status,
 		},
 	}
-	if isAddr && c.processPID != 0 {
+	if isAddr {
 		cfg.Address = &runner.AddressConfig{
 			ProcessPID:   c.processPID,
 			ProcessTitle: c.selectedWindowTitle(),
@@ -122,11 +121,8 @@ func (c *autopotController) config(modeFn func(string), statusFn func(int, int, 
 	return cfg
 }
 
-func (c *autopotController) wanted(modeFn func(string), statusFn func(int, int, int, int, int, int, int, int), logFn func(string)) runner.AutoPotConfig {
-	cfg := c.config(modeFn, statusFn, logFn)
-	cfg.Core.HPEnabled = cfg.Core.HPEnabled && cfg.Core.HPKeyVK != 0
-	cfg.Core.SPEnabled = cfg.Core.SPEnabled && cfg.Core.SPKeyVK != 0
-	return cfg
+func (c *autopotController) wanted(status runner.StatusSink, logFn func(string)) runner.AutoPotConfig {
+	return c.config(status, logFn)
 }
 
 func (a *guiApp) buildAutoPotTab(page *walk.TabPage) error {
@@ -207,7 +203,7 @@ func (a *guiApp) buildAutoPotModeSection(page *walk.TabPage) error {
 	a.autopot.autopotVisualRB.CheckedChanged().Attach(func() {
 		isAddress := a.autopot.autopotAddressRB.Checked()
 		a.setAutoPotAddressModeEnabled(isAddress)
-		if isAddress {
+		if isAddress && !a.profileApplying {
 			a.appendLog("AutoPot mode: Address reading — select a game window and bind potion keys")
 		}
 	})
@@ -262,7 +258,7 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 	if err := a.autopot.profileCB.SetMinMaxSize(walk.Size{Width: 120, Height: 0}, walk.Size{Width: 120, Height: 0}); err != nil {
 		return err
 	}
-	allProfiles := profiles.All()
+	allProfiles := runner.AllProfiles()
 	profileNames := make([]string, 0, len(allProfiles))
 	for _, p := range allProfiles {
 		profileNames = append(profileNames, p.Name)
@@ -276,7 +272,7 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 
 	// Wire window selection.
 	a.autopot.windowCB.CurrentIndexChanged().Attach(func() {
-		if a.autopot.isRefreshingWindows || a.profileApplying {
+		if a.autopot.isRefreshingWindows || a.profileApplying || a.autopot.suppressWindowEvents {
 			return
 		}
 		if a.autopot.windowCB.CurrentIndex() < 0 {
@@ -470,9 +466,9 @@ func (a *guiApp) openSelectedProcessHandle() error {
 	win := a.autopot.windowList[idx]
 	// Only log and update PID if it actually changed (guards against
 	// spurious CurrentIndexChanged firings from Walk's combo box).
-	if a.autopot.processPID != win.pid {
-		a.autopot.processPID = win.pid
-		a.appendLog(fmt.Sprintf("Selected %q (PID %d)", win.title, win.pid))
+	if a.autopot.processPID != win.PID {
+		a.autopot.processPID = win.PID
+		a.logToFile(fmt.Sprintf("Selected %q (PID %d)", win.Title, win.PID))
 	}
 	return nil
 }
@@ -487,7 +483,7 @@ func (a *guiApp) commitHPThresholdEdit() {
 		return
 	}
 	a.autopot.hpThreshold = v
-	a.appendLog(fmt.Sprintf("AutoPot HP threshold: %d%%", v))
+	a.logToFile(fmt.Sprintf("AutoPot HP threshold: %d%%", v))
 }
 
 func (a *guiApp) commitSPThresholdEdit() {
@@ -500,18 +496,18 @@ func (a *guiApp) commitSPThresholdEdit() {
 		return
 	}
 	a.autopot.spThreshold = v
-	a.appendLog(fmt.Sprintf("AutoPot SP threshold: %d%%", v))
+	a.logToFile(fmt.Sprintf("AutoPot SP threshold: %d%%", v))
 }
 
 func (a *guiApp) syncAutoPotSettings() {
 	if a.profileApplying {
 		return
 	}
-	cfg := a.autopot.wanted(a.autopotModeFn(), a.autopotStatusFn(), a.guiLog(a.appendLog))
+	cfg := a.autopot.wanted(a.autopotStatus(), a.fileLog())
 	a.mu.Lock()
 	cfg.Core.Session = a.inputSession
-	cfg.Core.Log = a.guiLog(a.appendLog)
-	r := a.autopotRunner
+	cfg.Core.Log = a.fileLog()
+	r := a.tools.autopot
 	a.mu.Unlock()
 
 	if cfg.Core.Session == nil || cfg.Core.Log == nil {
@@ -521,10 +517,10 @@ func (a *guiApp) syncAutoPotSettings() {
 	if r != nil && r.Running() {
 		// If neither HP nor SP keys are bound, stop the runner
 		// instead of letting it spin doing nothing.
-		if !cfg.Core.HPEnabled && !cfg.Core.SPEnabled {
+		if !cfg.HasBoundPotion() {
 			a.lifecycleMu.Lock()
 			a.mu.Lock()
-			a.autopotRunner = nil
+			a.tools.autopot = nil
 			a.mu.Unlock()
 			a.lifecycleMu.Unlock()
 			stopRunnerAsync(r)
@@ -543,13 +539,13 @@ func (a *guiApp) syncAutoPotSettings() {
 			a.autopot.prevAutoPotAddressMode = cfg.IsAddressMode()
 			a.lifecycleMu.Lock()
 			a.mu.Lock()
-			a.autopotRunner = nil
+			a.tools.autopot = nil
 			a.mu.Unlock()
 			a.lifecycleMu.Unlock()
 			// Stop the old reader before starting the replacement so
 			// both runners do not overlap on the same session.
 			stopRunnerAsync(r)
-			a.startAutoPotRunner(cfg, a.guiLog(a.appendLog))
+			a.startAutoPotRunner(cfg, a.fileLog())
 			return
 		}
 
@@ -562,7 +558,7 @@ func (a *guiApp) syncAutoPotSettings() {
 	}
 
 	a.autopot.prevAutoPotAddressMode = cfg.IsAddressMode()
-	a.startAutoPotRunner(cfg, a.guiLog(a.appendLog))
+	a.startAutoPotRunner(cfg, a.fileLog())
 }
 
 func (a *guiApp) setAutoPotConfigEnabled(enabled bool) {
@@ -586,40 +582,51 @@ func (a *guiApp) setAutoPotConfigEnabled(enabled bool) {
 func (a *guiApp) onClearHPKey() {
 	a.autopot.hpKeyVK = 0
 	a.autopot.hpKeyLabel.SetText("none")
-	a.appendLog("HP potion key cleared")
+	a.logToFile("HP potion key cleared")
 	a.syncAutoPotSettings()
 }
 
 func (a *guiApp) onClearSPKey() {
 	a.autopot.spKeyVK = 0
 	a.autopot.spKeyLabel.SetText("none")
-	a.appendLog("SP potion key cleared")
+	a.logToFile("SP potion key cleared")
 	a.syncAutoPotSettings()
 }
 
-func (a *guiApp) autopotModeFn() func(string) {
-	return func(mode string) {
-		if a.overlay == nil {
-			return
-		}
-		a.mainWindow.Synchronize(func() {
-			a.overlay.SetMode(mode)
-		})
-	}
+type overlayStatusSink struct {
+	app *guiApp
 }
 
-func (a *guiApp) autopotStatusFn() func(int, int, int, int, int, int, int, int) {
-	return func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int) {
-		if a.overlay == nil {
+func (a *guiApp) autopotStatus() runner.StatusSink {
+	return overlayStatusSink{app: a}
+}
+
+func (s overlayStatusSink) SetMode(mode string) {
+	s.app.mainWindow.Synchronize(func() {
+		if s.app.overlay != nil {
+			s.app.overlay.SetMode(mode)
+		}
+	})
+}
+
+func (s overlayStatusSink) SetValues(v runner.OverlayValues) {
+	s.app.mainWindow.Synchronize(func() {
+		if s.app.overlay == nil {
 			return
 		}
-		a.mainWindow.Synchronize(func() {
-			a.overlay.SetValues(hp, hpMax, sp, spMax)
-			if stripW > 0 && stripH > 0 {
-				a.overlay.SetPanelRect(stripX, stripY, stripW, stripH)
-			}
-		})
-	}
+		s.app.overlay.SetValues(v.HP, v.HPMax, v.SP, v.SPMax)
+		if v.PanelW > 0 && v.PanelH > 0 {
+			s.app.overlay.SetPanelRect(v.PanelX, v.PanelY, v.PanelW, v.PanelH)
+		}
+	})
+}
+
+func (s overlayStatusSink) ClearValues() {
+	s.app.mainWindow.Synchronize(func() {
+		if s.app.overlay != nil {
+			s.app.overlay.ClearValues()
+		}
+	})
 }
 
 func (a *guiApp) finishThresholdInput() {
@@ -693,11 +700,11 @@ func (a *guiApp) bindAutoPotKey(hp bool) {
 			if hp {
 				a.autopot.hpKeyVK = vk
 				a.autopot.hpKeyLabel.SetText(runner.KeyName(vk))
-				a.appendLog(fmt.Sprintf("HP potion key: %s", runner.KeyName(vk)))
+				a.logToFile(fmt.Sprintf("HP potion key: %s", runner.KeyName(vk)))
 			} else {
 				a.autopot.spKeyVK = vk
 				a.autopot.spKeyLabel.SetText(runner.KeyName(vk))
-				a.appendLog(fmt.Sprintf("SP potion key: %s", runner.KeyName(vk)))
+				a.logToFile(fmt.Sprintf("SP potion key: %s", runner.KeyName(vk)))
 			}
 			a.syncAutoPotSettings()
 		},

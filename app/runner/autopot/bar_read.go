@@ -190,33 +190,18 @@ func BarLooksFull(img image.Image, r Rect, hpBar bool) bool {
 }
 
 func bestFillWidth(img image.Image, r Rect, hpBar bool) int {
-	if !hpBar {
-		// For SP bars, use middle-row-primary with fallback, matching ReadSPFill.
-		// The middle row is most reliable; only widen the search when it shows 0.
-		midRow := r.Y + r.H/2
-		mid := readBarFillSingleRow(img, r.X, midRow, r.W, isSPFill).FilledWidth
-		if mid > 0 {
-			return mid
-		}
-		best := 0
-		for row := 0; row < r.H; row++ {
-			br := readBarFillSingleRow(img, r.X, r.Y+row, r.W, isSPFill)
-			if br.FilledWidth > best {
-				best = br.FilledWidth
-			}
-		}
-		return best
+	isPixel := isSPFill
+	if hpBar {
+		isPixel = isHPFillRead
 	}
-	// For HP bars, use median across rows (matching ReadHPFill) so a single
-	// noisy row with game-background green pixels can't falsely inflate the
-	// fill width and make BarLooksFull think the bar is full.
-	var vals []int
+	best := 0
 	for row := 0; row < r.H; row++ {
-		br := readBarFillSingleRow(img, r.X, r.Y+row, r.W, isHPFillRead)
-		vals = append(vals, br.FilledWidth)
+		br := readBarFillSingleRow(img, r.X, r.Y+row, r.W, isPixel)
+		if br.FilledWidth > best {
+			best = br.FilledWidth
+		}
 	}
-	sort.Ints(vals)
-	return vals[r.H/2]
+	return best
 }
 
 func barConfirmedNotFull(img image.Image, r Rect, hpBar bool, read BarRead) bool {
@@ -290,4 +275,3 @@ func isBarEmptyPixel(r, g, b uint8, hpBar bool) bool {
 	}
 	return isHPTrack(r, g, b) || isBarBackground(r, g, b)
 }
-

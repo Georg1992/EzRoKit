@@ -103,6 +103,42 @@ func TestPollKeyToggle_RisingEdge(t *testing.T) {
 	}
 }
 
+func TestHostKeyboard_UsesPackageVars(t *testing.T) {
+	origDown := PhysicalKeyDown
+	origEmerg := EmergencyKeyDown
+	origSwallow := SwallowPhysicalKeys
+	origTap := SetTappingVK
+	t.Cleanup(func() {
+		PhysicalKeyDown = origDown
+		EmergencyKeyDown = origEmerg
+		SwallowPhysicalKeys = origSwallow
+		SetTappingVK = origTap
+	})
+
+	var downVK, emergVK, tapVK int32
+	var swallowed []int32
+	PhysicalKeyDown = func(vk int32) bool { downVK = vk; return vk == 'Q' }
+	EmergencyKeyDown = func(vk int32) bool { emergVK = vk; return vk == 0x23 }
+	SwallowPhysicalKeys = func(vks []int32) { swallowed = vks }
+	SetTappingVK = func(vk int32) { tapVK = vk }
+
+	kb := HostKeyboard()
+	if !kb.KeyDown('Q') || downVK != 'Q' {
+		t.Fatalf("KeyDown: downVK=%d want Q", downVK)
+	}
+	if !kb.EmergencyDown(0x23) || emergVK != 0x23 {
+		t.Fatalf("EmergencyDown: emergVK=%d want 0x23", emergVK)
+	}
+	kb.Swallow([]int32{'1'})
+	if len(swallowed) != 1 || swallowed[0] != '1' {
+		t.Fatalf("Swallow: %v want [1]", swallowed)
+	}
+	kb.SetTapping('A')
+	if tapVK != 'A' {
+		t.Fatalf("SetTapping: %d want A", tapVK)
+	}
+}
+
 func TestPhysicalKeyDown_RestoresAfterTest(t *testing.T) {
 	// Verify the clean-up pattern works: after a sub-test swaps the
 	// variable, the next test sees the original (wired) value.

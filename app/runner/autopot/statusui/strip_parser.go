@@ -210,11 +210,9 @@ func NewReader(templatesDir string) (*Reader, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].rune < entries[j].rune })
 
 	return &Reader{
-		TemplatesDir: templatesDir,
-		// MinGlyphScore stays 0 here — Read substitutes 0.70 at
-		// call time so the user-set value is preserved (don't
-		// double-default in NewReader AND Read).
-		templates: entries,
+		TemplatesDir:  templatesDir,
+		MinGlyphScore: 0.70,
+		templates:     entries,
 	}, nil
 }
 
@@ -261,7 +259,7 @@ func NewReaderFromFS(fsys fs.FS, glyphsDir string) (*Reader, error) {
 		return nil, fmt.Errorf("statusui: no recognizable templates in %q (need 0-9, dot, slash, pipe, H, P, S)", glyphsDir)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].rune < entries[j].rune })
-	return &Reader{templates: entries}, nil
+	return &Reader{MinGlyphScore: 0.70, templates: entries}, nil
 }
 
 // Read runs the full pipeline on strip and returns either a
@@ -278,10 +276,6 @@ func (r *Reader) Read(strip image.Image) Result {
 	debug := r.Debug
 	debugDir := r.DebugDir
 	r.mu.RUnlock()
-
-	if minScore == 0 {
-		minScore = 0.70
-	}
 
 	mask := binarize(strip)
 	bounds := maskBounds(mask)

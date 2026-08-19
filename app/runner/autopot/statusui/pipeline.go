@@ -73,9 +73,6 @@ func NewPipeline(templatesDir string, minGlyphScore float64) (*Pipeline, error) 
 		return nil, err
 	}
 	r.MinGlyphScore = minGlyphScore
-	if r.MinGlyphScore == 0 {
-		r.MinGlyphScore = 0.70
-	}
 	return &Pipeline{
 		template: tpl,
 		locator:  DefaultStatusLineLocator(),
@@ -100,9 +97,6 @@ func NewPipelineFromFS(fsys fs.FS, glyphsDir string, minGlyphScore float64) (*Pi
 		return nil, err
 	}
 	r.MinGlyphScore = minGlyphScore
-	if r.MinGlyphScore == 0 {
-		r.MinGlyphScore = 0.70
-	}
 	return &Pipeline{
 		template: tpl,
 		locator:  DefaultStatusLineLocator(),

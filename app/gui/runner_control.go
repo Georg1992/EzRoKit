@@ -15,6 +15,7 @@ type lifecycleRunner interface {
 	Start() error
 	Stop()
 	Wait()
+	Running() bool
 }
 
 // replaceRunner stops the runner currently held by a GUI slot, starts a new
@@ -26,6 +27,7 @@ func replaceRunner(
 	store func(lifecycleRunner),
 	label string,
 	log func(string),
+	alert func(string),
 	session func() runner.InputSession,
 	wanted func() bool,
 	construct func(runner.InputSession) lifecycleRunner,
@@ -45,7 +47,9 @@ func replaceRunner(
 
 	current := construct(sess)
 	if err := current.Start(); err != nil {
-		log(fmt.Sprintf("%s start failed: %v", label, err))
+		msg := fmt.Sprintf("%s start failed: %v", label, err)
+		log(msg)
+		alert(msg)
 		return false
 	}
 	store(current)

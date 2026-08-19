@@ -39,7 +39,7 @@ func (c *keychainController) setKeyText(switchIdx, slotIdx int, vk int32) {
 }
 
 func (c *keychainController) config(logFn func(string)) runner.KeyChainConfig {
-	cfg := runner.KeyChainConfig{Log: logFn}
+	cfg := runner.KeyChainConfig{Log: logFn, Keyboard: runner.HostKeyboard()}
 	for i := 0; i < c.visibleCount; i++ {
 		sw := &c.switches[i]
 		for j := 0; j < runner.KeyChainSlotCount; j++ {
@@ -394,9 +394,9 @@ func (a *guiApp) syncKeyChainSettings() {
 		return
 	}
 
-	cfg := a.keychain.config(a.appendLog)
+	cfg := a.keychain.config(a.fileLog())
 	a.mu.Lock()
-	kc := a.keychainRunner
+	kc := a.tools.keychain
 	a.mu.Unlock()
 
 	if !cfg.Active() {
@@ -413,7 +413,7 @@ func (a *guiApp) syncKeyChainSettings() {
 		return
 	}
 
-	a.startKeyChainRunner(cfg, a.guiLog(a.appendLog))
+	a.startKeyChainRunner(cfg, a.fileLog())
 }
 
 func (a *guiApp) setKeyChainConfigEnabled(enabled bool) {
@@ -444,23 +444,24 @@ func (a *guiApp) startKeyChainRunner(cfg runner.KeyChainConfig, log func(string)
 	take := func() lifecycleRunner {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if a.keychainRunner == nil {
+		if a.tools.keychain == nil {
 			return nil
 		}
-		old := a.keychainRunner
-		a.keychainRunner = nil
+		old := a.tools.keychain
+		a.tools.keychain = nil
 		return old
 	}
 	store := func(r lifecycleRunner) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.keychainRunner = r.(*runner.KeyChainRunner)
+		a.tools.keychain = r.(*runner.KeyChainRunner)
 	}
 	replaceRunner(
 		take,
 		store,
 		"KeyChain",
 		log,
+		a.guiLog(a.appendLog),
 		func() runner.InputSession {
 			a.mu.Lock()
 			defer a.mu.Unlock()
@@ -478,8 +479,8 @@ func (a *guiApp) startKeyChainRunner(cfg runner.KeyChainConfig, log func(string)
 func (a *guiApp) stopKeyChainRunner() {
 	a.lifecycleMu.Lock()
 	a.mu.Lock()
-	kc := a.keychainRunner
-	a.keychainRunner = nil
+	kc := a.tools.keychain
+	a.tools.keychain = nil
 	a.mu.Unlock()
 	a.lifecycleMu.Unlock()
 	stopRunnerAsync(kc)
@@ -514,7 +515,7 @@ func (a *guiApp) clearKeyChainSwitch(switchIdx int) {
 	}
 	a.resetKeyChainSwitchData(switchIdx)
 	a.syncKeyChainSettings()
-	a.appendLog(fmt.Sprintf("KeyChain switch %d cleared", switchIdx+1))
+	a.logToFile(fmt.Sprintf("KeyChain switch %d cleared", switchIdx+1))
 }
 
 func (a *guiApp) removeKeyChainSwitch(switchIdx int) {
@@ -535,7 +536,7 @@ func (a *guiApp) removeKeyChainSwitch(switchIdx int) {
 	a.updateKeyChainRemoveButtons()
 	a.setKeyChainConfigEnabled(a.isViiperReady())
 	a.syncKeyChainSettings()
-	a.appendLog(fmt.Sprintf("KeyChain switch %d removed", switchIdx+1))
+	a.logToFile(fmt.Sprintf("KeyChain switch %d removed", switchIdx+1))
 }
 
 func (a *guiApp) bindKeyChainKey(switchIdx, slotIdx int) {
@@ -558,7 +559,7 @@ func (a *guiApp) bindKeyChainKey(switchIdx, slotIdx int) {
 			a.unsetKeyBindingExceptChain(vk, switchIdx)
 			a.keychain.switches[switchIdx].keyVKs[slotIdx] = vk
 			a.keychain.setKeyText(switchIdx, slotIdx, vk)
-			a.appendLog(fmt.Sprintf("Switch %d key %d: %s", switchIdx+1, slotIdx+1, runner.KeyName(vk)))
+			a.logToFile(fmt.Sprintf("Switch %d key %d: %s", switchIdx+1, slotIdx+1, runner.KeyName(vk)))
 			a.syncKeyChainSettings()
 		},
 	)

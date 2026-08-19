@@ -98,25 +98,14 @@ func isToggleVK(vk int32) bool {
 	return false
 }
 
-// WaitForKeyPress waits for the user to press AND release a key (a complete
-// tap), and returns the virtual-key code of that key. Returns ok=false on
-// timeout.
+// WaitForKeyPressContext waits for the user to press AND release a key (a
+// complete tap), and returns the virtual-key code of that key. Returns
+// ok=false on timeout or if ctx is cancelled.
 //
 // The two-phase approach (press → wait for release → return) prevents a
 // running clicker from immediately triggering when the bound key is added
 // to the runner while the user is still holding it. The binding only takes
 // effect after the key is released.
-//
-// Phase 1 — detect a rising edge (key transitions from not-pressed to
-// pressed), ignoring any keys already held down when the function started.
-// Phase 2 — wait for that specific key to be released.
-func WaitForKeyPress(timeout time.Duration) (int32, bool) {
-	return WaitForKeyPressContext(context.Background(), timeout)
-}
-
-// WaitForKeyPressContext is the cancellable form of WaitForKeyPress. It
-// preserves the press-and-release binding semantics while allowing GUI
-// shutdown to terminate the polling goroutine immediately.
 func WaitForKeyPressContext(ctx context.Context, timeout time.Duration) (int32, bool) {
 	deadline := time.Now().Add(timeout)
 

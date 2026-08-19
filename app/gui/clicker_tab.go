@@ -34,7 +34,7 @@ type clickerController struct {
 }
 
 func (c *clickerController) config(logFn func(string)) runner.Config {
-	cfg := runner.Config{Log: logFn}
+	cfg := runner.Config{Log: logFn, Keyboard: runner.HostKeyboard()}
 	for i := 0; i < c.visibleCount; i++ {
 		cfg.Slots[i] = runner.ClickerSlot{
 			TriggerVKs: c.triggerVKs[i],
@@ -298,7 +298,7 @@ func (a *guiApp) logClickerDelayIfChanged(index int) {
 		return
 	}
 	a.clicker.lastLoggedDelay[index] = delay
-	a.appendLog(fmt.Sprintf("%s delay: %d ms", clickerTitle(index), delay))
+	a.logToFile(fmt.Sprintf("%s delay: %d ms", clickerTitle(index), delay))
 }
 
 func (a *guiApp) setClickerConfigEnabled(enabled bool) {
@@ -328,7 +328,7 @@ func (a *guiApp) clearClickerKey(index int) {
 	}
 	a.clicker.triggerVKs[index] = [runner.ClickerKeysPerBind]int32{}
 	a.updateClickerKeyLabel(index)
-	a.appendLog(fmt.Sprintf("%s keys cleared", clickerTitle(index)))
+	a.logToFile(fmt.Sprintf("%s keys cleared", clickerTitle(index)))
 	a.setClickerConfigEnabled(a.isViiperReady())
 	a.syncRunnerSettings()
 }
@@ -369,7 +369,7 @@ func (a *guiApp) removeClicker(index int) {
 	a.updateClickerRemoveButtons()
 	a.setClickerConfigEnabled(a.isViiperReady())
 	a.syncRunnerSettings()
-	a.appendLog(fmt.Sprintf("%s removed", clickerTitle(index)))
+	a.logToFile(fmt.Sprintf("%s removed", clickerTitle(index)))
 }
 
 func (a *guiApp) bindClickerKey(index int) {
@@ -395,7 +395,7 @@ func (a *guiApp) bindClickerKey(index int) {
 				return
 			}
 			a.updateClickerKeyLabel(index)
-			a.appendLog(fmt.Sprintf("%s added key %s", clickerTitle(index), runner.KeyName(vk)))
+			a.logToFile(fmt.Sprintf("%s added key %s", clickerTitle(index), runner.KeyName(vk)))
 			a.setClickerConfigEnabled(a.isViiperReady())
 			a.syncRunnerSettings()
 		},

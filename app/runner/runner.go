@@ -16,6 +16,7 @@ package runner
 import (
 	"ezrokit/runner/autopot"
 	"ezrokit/runner/internal/session"
+	"ezrokit/runner/profiles"
 )
 
 // InputSession is the canonical input-device interface any runner uses.
@@ -28,9 +29,18 @@ type (
 	AutoPotConfig = autopot.AutoPotConfig
 	CoreConfig    = autopot.CoreConfig
 	AddressConfig = autopot.AddressConfig
+	StatusSink    = autopot.StatusSink
+	OverlayValues = autopot.OverlayValues
 )
+
+// ClickerInputSession is the clicker-only session surface (TapKeyWithClick).
+type ClickerInputSession = session.ClickerInputSession
 
 var (
-	NewAutoPot = autopot.NewAutoPot
+	NewAutoPot     = autopot.NewAutoPot
+	AllProfiles    = profiles.All
+	DefaultProfile = profiles.Default
 )
 
+// Profile is a game-client memory map used by AutoPot address mode.
+type Profile = profiles.Profile

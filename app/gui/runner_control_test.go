@@ -39,6 +39,10 @@ func (f *fakeRunner) Wait() {
 	<-f.stopped
 }
 
+func (f *fakeRunner) Running() bool {
+	return f.startErr == nil && f.startCalls.Load() > 0 && f.stopCalls.Load() == 0
+}
+
 var _ lifecycleRunner = (*fakeRunner)(nil)
 
 func testSession() runner.InputSession { return testInputSession{} }
@@ -46,7 +50,7 @@ func testSession() runner.InputSession { return testInputSession{} }
 type testInputSession struct{}
 
 func (testInputSession) TapKey(int32, time.Duration) error { return nil }
-func (testInputSession) Reset()                             {}
+func (testInputSession) Reset()                            {}
 
 func TestReplaceRunnerStartsAndPublishes(t *testing.T) {
 	var current lifecycleRunner
@@ -61,6 +65,7 @@ func TestReplaceRunnerStartsAndPublishes(t *testing.T) {
 		},
 		func(next lifecycleRunner) { current = next },
 		"fake",
+		func(string) {},
 		func(string) {},
 		testSession,
 		func() bool { return true },
@@ -90,6 +95,7 @@ func TestReplaceRunnerSkipsWhenNotWanted(t *testing.T) {
 		func(lifecycleRunner) {},
 		"fake",
 		func(string) {},
+		func(string) {},
 		testSession,
 		func() bool { return false },
 		func(runner.InputSession) lifecycleRunner {
@@ -110,6 +116,7 @@ func TestReplaceRunnerSkipsWithoutSession(t *testing.T) {
 		func(lifecycleRunner) {},
 		"fake",
 		func(string) {},
+		func(string) {},
 		func() runner.InputSession { return nil },
 		func() bool { return true },
 		func(runner.InputSession) lifecycleRunner { return newFakeRunner() },
@@ -121,11 +128,13 @@ func TestReplaceRunnerSkipsWithoutSession(t *testing.T) {
 func TestReplaceRunnerLeavesSlotEmptyOnStartFailure(t *testing.T) {
 	var current lifecycleRunner
 	var logs []string
+	var alerts []string
 	if replaceRunner(
 		func() lifecycleRunner { old := current; current = nil; return old },
 		func(next lifecycleRunner) { current = next },
 		"fake",
 		func(message string) { logs = append(logs, message) },
+		func(message string) { alerts = append(alerts, message) },
 		testSession,
 		func() bool { return true },
 		func(runner.InputSession) lifecycleRunner {
@@ -139,5 +148,8 @@ func TestReplaceRunnerLeavesSlotEmptyOnStartFailure(t *testing.T) {
 	}
 	if len(logs) != 1 {
 		t.Fatalf("logs = %v, want one failure log", logs)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("alerts = %v, want one failure alert", alerts)
 	}
 }

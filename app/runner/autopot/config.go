@@ -10,18 +10,17 @@ import (
 // CoreConfig holds the shared configuration used by all BarReader
 // implementations and the AutoPotRunner orchestrator.
 type CoreConfig struct {
-	Session        session.InputSession
-	HPThreshold    int
-	SPThreshold    int
-	HPKeyVK        int32
-	SPKeyVK        int32
-	HPKeyName      string // human-readable key name for overlay (e.g. "F1")
-	SPKeyName      string
-	HPEnabled      bool
-	SPEnabled      bool
-	Log            func(string)
-	OnStatusParsed func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
-	OnStatusUIMode func(mode string)
+	Session     session.InputSession
+	HPThreshold int
+	SPThreshold int
+	HPKeyVK     int32
+	SPKeyVK     int32
+	HPKeyName   string // human-readable key name for overlay (e.g. "F1")
+	SPKeyName   string
+	HPEnabled   bool
+	SPEnabled   bool
+	Log         func(string)
+	Status      StatusSink
 }
 
 // AddressConfig holds configuration specific to the address-reading
@@ -46,9 +45,9 @@ func (c *AutoPotConfig) applyDefaults() {
 	}
 }
 
-// IsAddressMode reports whether address-reading mode is active.
+// IsAddressMode reports whether address-reading mode is selected.
 func (c AutoPotConfig) IsAddressMode() bool {
-	return c.Address != nil && c.Address.ProcessPID != 0
+	return c.Address != nil
 }
 
 // validate checks that required fields are present.
@@ -65,5 +64,13 @@ func (c AutoPotConfig) validate() error {
 	if c.Core.SPEnabled && c.Core.SPKeyVK == 0 {
 		return fmt.Errorf("SP potion key is not set")
 	}
+	if c.Address != nil && c.Address.ProcessPID == 0 {
+		return fmt.Errorf("address mode: no game window selected")
+	}
 	return nil
+}
+
+// HasBoundPotion reports whether at least one bar is enabled with a key.
+func (c AutoPotConfig) HasBoundPotion() bool {
+	return (c.Core.HPEnabled && c.Core.HPKeyVK != 0) || (c.Core.SPEnabled && c.Core.SPKeyVK != 0)
 }

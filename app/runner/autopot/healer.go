@@ -36,7 +36,7 @@ func (h *healer) healUntilWithInitial(ctx context.Context, reader BarReader, hpB
 	)
 	defer func() {
 		cfg := h.settings()
-		clearPotsEndedMode(cfg.Core.OnStatusUIMode, potsEnded)
+		clearPotsEndedMode(cfg.Core.Status, potsEnded)
 	}()
 
 	for {
@@ -65,6 +65,7 @@ func (h *healer) healUntilWithInitial(ctx context.Context, reader BarReader, hpB
 		if result.Status != StatusFound {
 			return
 		}
+		publishStatus(cfg.Core.Status, result)
 
 		pct := result.HP
 		threshold := float64(cfg.Core.HPThreshold)
@@ -111,10 +112,10 @@ func (h *healer) potsEndedStep(cfg AutoPotConfig, hpBar bool, elapsed time.Durat
 	}
 	if absPctDiff(pct, lastPct) >= valueChangeTol {
 		cfg.Core.Log("autopot: potion took effect, resuming normal speed")
-		setMode(cfg.Core.OnStatusUIMode, "")
+		setMode(cfg.Core.Status, "")
 		return false, time.Now()
 	}
-	setMode(cfg.Core.OnStatusUIMode, potsEndedLabel(cfg, hpBar))
+	setMode(cfg.Core.Status, potsEndedLabel(cfg, hpBar))
 	return true, healStart
 }
 
@@ -128,13 +129,14 @@ func (h *healer) potsEndedTap(ctx context.Context, cfg AutoPotConfig, vk int32, 
 	}
 	afterResult := reader.ReadValues(ctx)
 	if afterResult.Status == StatusFound {
+		publishStatus(cfg.Core.Status, afterResult)
 		afterPct := afterResult.HP
 		if !hpBar {
 			afterPct = afterResult.SP
 		}
 		if absPctDiff(afterPct, beforePct) >= valueChangeTol {
 			cfg.Core.Log("autopot: potion took effect, resuming normal speed")
-			setMode(cfg.Core.OnStatusUIMode, "")
+			setMode(cfg.Core.Status, "")
 			return true, true
 		}
 	}
@@ -151,12 +153,6 @@ func (h *healer) healTap(ctx context.Context, cfg AutoPotConfig, vk int32) bool 
 		return false
 	}
 	return true
-}
-
-func clearPotsEndedMode(fn func(string), potsEnded bool) {
-	if potsEnded && fn != nil {
-		fn("")
-	}
 }
 
 func potsEndedLabel(cfg AutoPotConfig, hpBar bool) string {

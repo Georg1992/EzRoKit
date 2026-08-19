@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	pixelModeSentinel     = -1
 	ocrProbeInterval      = 2 * time.Second
 	statusUIRetryInterval = 5 * time.Second
 )
@@ -39,9 +38,15 @@ func newReaderController(reader BarReader, pixel *pixelBarReader, ocr *statusUIR
 	}
 }
 
-func (c *readerController) reader() BarReader { return c.active }
-func (c *readerController) isAddress() bool   { return c.address }
-func (c *readerController) isPixel() bool     { return !c.address && !c.usingOCR }
+func (c *readerController) initialMode() (mode string, clearValues bool) {
+	if c.address {
+		return "Address reading", false
+	}
+	if c.usingOCR {
+		return "Searching...", false
+	}
+	return "Pixelsearch", true
+}
 
 // process returns true when result is valid for normal HP/SP processing.
 // Failure delays and reader transitions are kept inside this controller.
@@ -68,9 +73,9 @@ func (c *readerController) switchToPixel(cfg AutoPotConfig, result BarReadResult
 	cfg.Core.Log(fmt.Sprintf("autopot: statusui issue, switching to pixel-bar: %v", result.Err))
 	c.active = c.pixel
 	c.usingOCR = false
-	setMode(cfg.Core.OnStatusUIMode, "Pixelsearch")
-	if cfg.Core.OnStatusParsed != nil {
-		cfg.Core.OnStatusParsed(pixelModeSentinel, 0, pixelModeSentinel, 0, 0, 0, 0, 0)
+	setMode(cfg.Core.Status, "Pixelsearch")
+	if cfg.Core.Status != nil {
+		cfg.Core.Status.ClearValues()
 	}
 	c.nextOCRRetry = time.Now().Add(ocrProbeInterval)
 }
@@ -101,7 +106,8 @@ func (c *readerController) probeOCR(ctx context.Context, cfg AutoPotConfig) {
 		cfg.Core.Log("autopot: statusui recovered, switching back")
 		c.active = c.ocr
 		c.usingOCR = true
-		setMode(cfg.Core.OnStatusUIMode, "OCR")
+		setMode(cfg.Core.Status, "OCR")
+		publishStatus(cfg.Core.Status, probe)
 		c.loggedPixelFail = false
 	}
 }
@@ -111,8 +117,6 @@ func (c *readerController) markValid() {
 	c.loggedPixelFail = false
 }
 
-func setMode(fn func(string), mode string) {
-	if fn != nil {
-		fn(mode)
-	}
-}
+func (c *readerController) reader() BarReader { return c.active }
+func (c *readerController) isAddress() bool   { return c.address }
+func (c *readerController) isPixel() bool     { return !c.address && !c.usingOCR }

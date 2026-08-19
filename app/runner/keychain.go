@@ -34,6 +34,7 @@ func (s KeyChainSwitch) Active() bool {
 // session.InputSession — same interface other runners use.
 type KeyChainConfig struct {
 	Session  session.InputSession
+	Keyboard PhysicalInput
 	Switches [KeyChainCount]KeyChainSwitch
 	Log      func(string)
 }
@@ -69,6 +70,9 @@ func NewKeyChain(cfg KeyChainConfig) *KeyChainRunner {
 				if c.Session == nil {
 					return fmt.Errorf("input session is required")
 				}
+				if c.Keyboard == nil {
+					return fmt.Errorf("keyboard is required")
+				}
 				return nil
 			},
 			nil,
@@ -84,6 +88,7 @@ func (k *KeyChainRunner) UpdateSettings(cfg KeyChainConfig) {
 	old := k.settings()
 	cfg.Log = old.Log
 	cfg.Session = old.Session
+	cfg.Keyboard = old.Keyboard
 	cfg.applyDefaults()
 	k.lc.UpdateSettings(cfg)
 }
@@ -106,17 +111,19 @@ func (k *KeyChainRunner) Wait() { k.lc.Wait() }
 // start another pass if the key is still held. A tap, or a release mid-pass,
 // still finishes A→B→C; only the next pass is skipped.
 func (k *KeyChainRunner) run(ctx context.Context, _ KeyChainConfig) {
+	kb := k.settings().Keyboard
 	defer k.settings().Session.Reset()
-	defer SwallowPhysicalKeys(nil)
-	defer SetTappingVK(0)
+	defer kb.Swallow(nil)
+	defer kb.SetTapping(0)
 	var heldVK int32
 	for ctx.Err() == nil {
-		if emergencyDown() {
+		if emergencyDown(kb) {
 			return
 		}
 
 		current := k.settings()
-		SwallowPhysicalKeys(chainTriggerVKs(current))
+		kb = current.Keyboard
+		kb.Swallow(chainTriggerVKs(current))
 		vk, sw, ok := heldChainTrigger(current, heldVK)
 		if !ok {
 			if heldVK != 0 {
@@ -128,7 +135,7 @@ func (k *KeyChainRunner) run(ctx context.Context, _ KeyChainConfig) {
 		}
 		heldVK = vk
 
-		if err := k.executeChain(ctx, current.Session, sw); err != nil {
+		if err := k.executeChain(ctx, current.Session, kb, sw); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -142,7 +149,7 @@ func (k *KeyChainRunner) run(ctx context.Context, _ KeyChainConfig) {
 // Other keys and a second switch cannot take over mid-hold.
 func heldChainTrigger(current KeyChainConfig, heldVK int32) (int32, KeyChainSwitch, bool) {
 	if heldVK != 0 {
-		if !PhysicalKeyDown(heldVK) {
+		if !current.Keyboard.KeyDown(heldVK) {
 			return 0, KeyChainSwitch{}, false
 		}
 		if sw, ok := switchForTrigger(current, heldVK); ok {
@@ -159,7 +166,7 @@ func firstHeldChainTrigger(current KeyChainConfig) (int32, KeyChainSwitch, bool)
 			continue
 		}
 		trigger := sw.Keys[0]
-		if PhysicalKeyDown(trigger) {
+		if current.Keyboard.KeyDown(trigger) {
 			return trigger, sw, true
 		}
 	}
@@ -185,7 +192,7 @@ func switchForTrigger(current KeyChainConfig, vk int32) (KeyChainSwitch, bool) {
 	return KeyChainSwitch{}, false
 }
 
-func (k *KeyChainRunner) executeChain(ctx context.Context, sess session.InputSession, sw KeyChainSwitch) error {
+func (k *KeyChainRunner) executeChain(ctx context.Context, sess session.InputSession, kb PhysicalInput, sw KeyChainSwitch) error {
 	for i := 0; i < KeyChainSlotCount; i++ {
 		if sw.Keys[i] == 0 {
 			continue
@@ -193,13 +200,13 @@ func (k *KeyChainRunner) executeChain(ctx context.Context, sess session.InputSes
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if emergencyDown() {
+		if emergencyDown(kb) {
 			return nil
 		}
-		if err := tapChainKey(sess, sw.Keys[i]); err != nil {
+		if err := tapChainKey(sess, kb, sw.Keys[i]); err != nil {
 			return err
 		}
-		sleepChainDelay(ctx, time.Duration(sw.DelaysMs[i])*time.Millisecond)
+		sleepChainDelay(ctx, time.Duration(sw.DelaysMs[i])*time.Millisecond, kb)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -207,19 +214,19 @@ func (k *KeyChainRunner) executeChain(ctx context.Context, sess session.InputSes
 	return nil
 }
 
-func tapChainKey(sess session.InputSession, vk int32) error {
-	SetTappingVK(vk)
-	defer SetTappingVK(0)
+func tapChainKey(sess session.InputSession, kb PhysicalInput, vk int32) error {
+	kb.SetTapping(vk)
+	defer kb.SetTapping(0)
 	return sess.TapKey(vk, timing.KeyTapHold)
 }
 
 // sleepChainDelay waits out a step delay the same way the clicker waits out
 // DelayMs: poll so Stop and End/F12 cancel it. The trigger is not re-checked
 // to abort the pass; a tap must still finish the remaining keys.
-func sleepChainDelay(ctx context.Context, d time.Duration) {
+func sleepChainDelay(ctx context.Context, d time.Duration, kb PhysicalInput) {
 	deadline := time.Now().Add(d)
 	for ctx.Err() == nil && time.Now().Before(deadline) {
-		if emergencyDown() {
+		if emergencyDown(kb) {
 			return
 		}
 		wait := time.Until(deadline)

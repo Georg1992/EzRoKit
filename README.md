@@ -75,10 +75,12 @@ git push origin v1.0.0
 Two reading modes are available:
 
 - **Visual (screen capture)** — OCR reads the HP/SP numbers from the in-game
-  status panel, with color-based bar detection as an automatic fallback.
-  Keep the game visible so the panel/bars can be found.
+  status panel. If the panel cannot be read, pixel-bar recovery is used
+  until OCR finds the panel again. Keep the game visible so the panel/bars
+  can be found.
 - **Address reading** — reads HP/SP directly from the game process memory.
   Select the game window and a profile, then assign the potion hotkeys.
+  Address mode stays in address mode; it does not switch to visual reading.
 
 Set the trigger **%** and assign **hotkeys** for HP and SP potions, then click **Start**. When HP or SP drops below its threshold, the assigned key is pressed until the value recovers.
 

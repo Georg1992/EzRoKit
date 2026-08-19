@@ -137,40 +137,47 @@ func TestHealTarget(t *testing.T) {
 	}
 }
 
+type recordSink struct {
+	modes  []string
+	values []OverlayValues
+	clears int
+}
+
+func (s *recordSink) SetMode(mode string)       { s.modes = append(s.modes, mode) }
+func (s *recordSink) SetValues(v OverlayValues) { s.values = append(s.values, v) }
+func (s *recordSink) ClearValues()              { s.clears++ }
+
 func TestSetMode_NilCallback(t *testing.T) {
-	// Must not panic when fn is nil.
 	setMode(nil, "OCR")
 	setMode(nil, "")
 }
 
 func TestSetMode_CallsCallback(t *testing.T) {
-	var got string
-	fn := func(s string) { got = s }
-
-	setMode(fn, "")
-	if got != "" {
-		t.Errorf("setMode(fn, '') called with %q; want empty", got)
+	sink := &recordSink{}
+	setMode(sink, "OCR")
+	if len(sink.modes) != 1 || sink.modes[0] != "OCR" {
+		t.Errorf("setMode(sink, OCR) modes = %v; want [OCR]", sink.modes)
+	}
+	setMode(sink, "")
+	if len(sink.modes) != 2 || sink.modes[1] != "" {
+		t.Errorf("setMode(sink, '') modes = %v; want [OCR, \"\"]", sink.modes)
 	}
 }
 
-// TestClearPotsEndedMode verifies that clearPotsEndedMode only calls
-// setMode when potsEnded is true (to avoid unnecessary overlay updates).
 func TestClearPotsEndedMode(t *testing.T) {
 	t.Run("clears when potsEnded=true", func(t *testing.T) {
-		var got string
-		fn := func(s string) { got = s }
-		clearPotsEndedMode(fn, true)
-		if got != "" {
-			t.Errorf("clearPotsEndedMode(fn, true) = %q; want empty", got)
+		sink := &recordSink{}
+		clearPotsEndedMode(sink, true)
+		if len(sink.modes) != 1 || sink.modes[0] != "" {
+			t.Errorf("clearPotsEndedMode(sink, true) modes = %v; want [\"\"]", sink.modes)
 		}
 	})
 
 	t.Run("skips when potsEnded=false", func(t *testing.T) {
-		called := false
-		fn := func(s string) { called = true }
-		clearPotsEndedMode(fn, false)
-		if called {
-			t.Error("clearPotsEndedMode(fn, false) called setMode; should not")
+		sink := &recordSink{}
+		clearPotsEndedMode(sink, false)
+		if len(sink.modes) != 0 {
+			t.Errorf("clearPotsEndedMode(sink, false) modes = %v; want none", sink.modes)
 		}
 	})
 }

@@ -45,7 +45,8 @@ type guiApp struct {
 	viiperBadge    *viiperBadge
 	profileLogRow  *walk.Composite
 
-	mu sync.Mutex
+	mu    sync.Mutex
+	logMu sync.Mutex
 	// lifecycleMu serializes GUI runner slot ownership with starts and
 	// stops. Without it, a stop could observe an empty slot between a
 	// runner's Start() and its publication, leaving that runner orphaned.
@@ -61,10 +62,7 @@ type guiApp struct {
 	viiperStartupCancel context.CancelFunc
 	lifetimeCtx         context.Context
 	lifetimeCancel      context.CancelFunc
-	runner              *runner.Runner
-	autopotRunner       *runner.AutoPotRunner
-	timerKeyRunner      *runner.TimerKeyRunner
-	keychainRunner      *runner.KeyChainRunner
+	tools               toolsHost
 	inputSession        *runner.ViiperSession
 	overlay             *statusOverlay
 	viiperMonitor       *viiperMonitor
@@ -108,15 +106,8 @@ func (a *guiApp) shutdown() {
 			a.lifetimeCancel()
 			a.lifetimeCancel = nil
 		}
-		r := a.runner
-		ap := a.autopotRunner
-		tk := a.timerKeyRunner
-		kc := a.keychainRunner
+		taken := a.tools.takeAll()
 		session := a.inputSession
-		a.runner = nil
-		a.autopotRunner = nil
-		a.timerKeyRunner = nil
-		a.keychainRunner = nil
 		a.inputSession = nil
 		if a.startupCancel != nil {
 			a.startupCancel()
@@ -139,22 +130,7 @@ func (a *guiApp) shutdown() {
 			a.logFile = nil
 		}
 
-		if r != nil {
-			r.Stop()
-			r.Wait()
-		}
-		if ap != nil {
-			ap.Stop()
-			ap.Wait()
-		}
-		if tk != nil {
-			tk.Stop()
-			tk.Wait()
-		}
-		if kc != nil {
-			kc.Stop()
-			kc.Wait()
-		}
+		taken.stopAndWait()
 		if session != nil {
 			session.Close()
 		}
@@ -249,9 +225,7 @@ func (a *guiApp) startBackgroundMonitors() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runner.SetKeyboardLog(func(s string) {
-		a.mainWindow.Synchronize(func() { a.appendLog(s) })
-	})
+	runner.SetKeyboardLog(a.fileLog())
 	if err := runner.StartPhysicalKeyboard(ctx); err != nil {
 		a.appendLog(fmt.Sprintf("Physical keyboard tracking failed: %v", err))
 	}
@@ -397,19 +371,7 @@ func (a *guiApp) isStarted() bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.runner != nil && a.runner.Running() {
-		return true
-	}
-	if a.autopotRunner != nil && a.autopotRunner.Running() {
-		return true
-	}
-	if a.timerKeyRunner != nil && a.timerKeyRunner.Running() {
-		return true
-	}
-	if a.keychainRunner != nil && a.keychainRunner.Running() {
-		return true
-	}
-	return false
+	return a.tools.anyRunning()
 }
 
 // setConfigEnabled enables or disables all tab configuration (clicker slots,
@@ -450,11 +412,7 @@ func (a *guiApp) onStart() {
 		a.appendLog("Cannot start tools — VIIPER is not running. Start VIIPER first.")
 		return
 	}
-	if a.shuttingDown.Load() || a.stopping.Load() != 0 || a.starting.Load() != 0 ||
-		(a.runner != nil && a.runner.Running()) ||
-		(a.autopotRunner != nil && a.autopotRunner.Running()) ||
-		(a.timerKeyRunner != nil && a.timerKeyRunner.Running()) ||
-		(a.keychainRunner != nil && a.keychainRunner.Running()) {
+	if a.shuttingDown.Load() || a.stopping.Load() != 0 || a.starting.Load() != 0 || a.tools.anyRunning() {
 		a.mu.Unlock()
 		return
 	}
@@ -485,9 +443,8 @@ func (a *guiApp) onStart() {
 // startInBackground runs the long-running tools startup work off the GUI
 // thread. VIIPER is already running — this only wires up the runners.
 func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
-	logFn := func(s string) {
-		a.mainWindow.Synchronize(func() { a.appendLog(s) })
-	}
+	diag := a.fileLog()
+	user := a.guiLog(a.appendLog)
 	isStillStarting := func() bool {
 		if ctx.Err() != nil {
 			return false
@@ -508,21 +465,21 @@ func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 	a.mu.Unlock()
 
 	if session == nil {
-		logFn("Cannot start — VIIPER session is nil")
+		user("Cannot start — VIIPER session is nil")
 		finishFailure()
 		return
 	}
 
-	logFn("Reusing VIIPER session...")
+	diag("Reusing VIIPER session...")
 	session.Reset()
 
 	if !isStillStarting() {
 		return
 	}
 
-	cfg := a.clicker.config(logFn)
+	cfg := a.clicker.config(diag)
 	cfg.Session = session
-	cfg.Log = logFn
+	cfg.Log = diag
 
 	r := runner.New(cfg)
 	// Publish the clicker under the same ownership lock used by onStop and
@@ -537,19 +494,19 @@ func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 	}
 	if err := r.Start(); err != nil {
 		a.lifecycleMu.Unlock()
-		logFn(fmt.Sprintf("Start failed: %v", err))
+		user(fmt.Sprintf("Start failed: %v", err))
 		finishFailure()
 		return
 	}
 	a.mu.Lock()
-	a.runner = r
+	a.tools.clicker = r
 	a.mu.Unlock()
 	a.lifecycleMu.Unlock()
 	if !isStillStarting() {
 		a.lifecycleMu.Lock()
 		a.mu.Lock()
-		if a.runner == r {
-			a.runner = nil
+		if a.tools.clicker == r {
+			a.tools.clicker = nil
 		}
 		a.mu.Unlock()
 		a.lifecycleMu.Unlock()
@@ -558,7 +515,7 @@ func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 		return
 	}
 
-	if !a.startRemainingRunners(ctx, generation, session, logFn) {
+	if !a.startRemainingRunners(ctx, generation, session, diag) {
 		return
 	}
 
@@ -570,7 +527,7 @@ func (a *guiApp) startInBackground(ctx context.Context, generation uint64) {
 	}
 
 	a.mainWindow.Synchronize(func() { a.setToolsStarted(true) })
-	logFn("Tools started")
+	user("Tools started")
 }
 
 // startRemainingRunners starts AutoPot, TimerKey, and KeyChain runners.
@@ -589,7 +546,7 @@ func (a *guiApp) startRemainingRunners(ctx context.Context, generation uint64, s
 	if stopIfCancelled() {
 		return false
 	}
-	autopotCfg := a.autopot.wanted(a.autopotModeFn(), a.autopotStatusFn(), logFn)
+	autopotCfg := a.autopot.wanted(a.autopotStatus(), logFn)
 	autopotCfg.Core.Session = session
 	autopotCfg.Core.Log = logFn
 	timerCfg := a.timer.wanted(logFn)
@@ -607,7 +564,7 @@ func (a *guiApp) startRemainingRunners(ctx context.Context, generation uint64, s
 	}
 
 	// If no autopot keys are bound, show "AutoPot off" instead of a stale mode.
-	if !autopotCfg.Core.HPEnabled && !autopotCfg.Core.SPEnabled {
+	if !autopotCfg.HasBoundPotion() {
 		a.mainWindow.Synchronize(func() {
 			if a.overlay != nil {
 				a.overlay.SetMode("AutoPot off")
@@ -633,32 +590,9 @@ func (a *guiApp) stopStartedRunners() {
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
 	a.mu.Lock()
-	r := a.runner
-	ap := a.autopotRunner
-	tk := a.timerKeyRunner
-	kc := a.keychainRunner
-	a.runner = nil
-	a.autopotRunner = nil
-	a.timerKeyRunner = nil
-	a.keychainRunner = nil
+	taken := a.tools.takeAll()
 	a.mu.Unlock()
-
-	if r != nil {
-		r.Stop()
-		r.Wait()
-	}
-	if ap != nil {
-		ap.Stop()
-		ap.Wait()
-	}
-	if tk != nil {
-		tk.Stop()
-		tk.Wait()
-	}
-	if kc != nil {
-		kc.Stop()
-		kc.Wait()
-	}
+	taken.stopAndWait()
 }
 
 // onStop stops all tools but keeps the VIIPER session alive so the next
@@ -668,15 +602,8 @@ func (a *guiApp) onStop() {
 	a.stopping.Store(1)
 	a.lifecycleMu.Lock()
 	a.mu.Lock()
-	r := a.runner
-	ap := a.autopotRunner
-	tk := a.timerKeyRunner
-	kc := a.keychainRunner
+	taken := a.tools.takeAll()
 	session := a.inputSession
-	a.runner = nil
-	a.autopotRunner = nil
-	a.timerKeyRunner = nil
-	a.keychainRunner = nil
 	// Keep a.inputSession alive so the next Start reuses it.
 	// Full cleanup (Close) happens in shutdown().
 	// Invalidate any in-flight startup goroutine before releasing the lock.
@@ -693,22 +620,7 @@ func (a *guiApp) onStop() {
 	a.appendLog("Stopping tools...")
 
 	go func() {
-		if r != nil {
-			r.Stop()
-			r.Wait()
-		}
-		if ap != nil {
-			ap.Stop()
-			ap.Wait()
-		}
-		if tk != nil {
-			tk.Stop()
-			tk.Wait()
-		}
-		if kc != nil {
-			kc.Stop()
-			kc.Wait()
-		}
+		taken.stopAndWait()
 		if session != nil {
 			session.Reset()
 			// Keep the session alive; the next Start reuses it.
@@ -733,44 +645,36 @@ func (a *guiApp) startAutoPotRunner(cfg runner.AutoPotConfig, log func(string)) 
 	take := func() lifecycleRunner {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if a.autopotRunner == nil {
+		if a.tools.autopot == nil {
 			return nil
 		}
-		old := a.autopotRunner
-		a.autopotRunner = nil
+		old := a.tools.autopot
+		a.tools.autopot = nil
 		return old
 	}
 	store := func(r lifecycleRunner) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.autopotRunner = r.(*runner.AutoPotRunner)
+		a.tools.autopot = r.(*runner.AutoPotRunner)
 	}
 	replaceRunner(
 		take,
 		store,
 		"AutoPot",
 		log,
+		a.guiLog(a.appendLog),
 		func() runner.InputSession {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			return a.inputSession
 		},
-		func() bool { return cfg.Core.HPEnabled || cfg.Core.SPEnabled },
+		func() bool { return cfg.HasBoundPotion() },
 		func(sess runner.InputSession) lifecycleRunner {
 			cfg.Core.Session = sess
 			cfg.Core.Log = log
 			return runner.NewAutoPot(cfg)
 		},
 	)
-}
-
-// guiLog wraps a function call in mainWindow.Synchronize so it always
-// marshals to the GUI thread. Use for callbacks that are invoked from
-// background goroutines but call Walk UI operations (e.g. appendLog).
-func (a *guiApp) guiLog(fn func(string)) func(string) {
-	return func(s string) {
-		a.mainWindow.Synchronize(func() { fn(s) })
-	}
 }
 
 // unsetKeyBinding searches every key storage location in the app for vk.
@@ -788,7 +692,7 @@ func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 	for i := 0; i < a.clicker.visibleCount; i++ {
 		if a.clicker.removeKey(i, vk) {
 			a.updateClickerKeyLabel(i)
-			a.appendLog(fmt.Sprintf("Key %s removed from %s (reassigned)", runner.KeyName(vk), clickerTitle(i)))
+			a.logToFile(fmt.Sprintf("Key %s removed from %s (reassigned)", runner.KeyName(vk), clickerTitle(i)))
 			a.setClickerConfigEnabled(a.isViiperReady())
 			a.syncRunnerSettings()
 			return
@@ -799,7 +703,7 @@ func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 		if a.timer.keyVKs[i] == vk {
 			a.timer.keyVKs[i] = 0
 			a.timer.slots[i].keyLabel.SetText("none")
-			a.appendLog(fmt.Sprintf("Key %s removed from Timer %d (reassigned)", runner.KeyName(vk), i+1))
+			a.logToFile(fmt.Sprintf("Key %s removed from Timer %d (reassigned)", runner.KeyName(vk), i+1))
 			a.syncTimerKeySettings()
 			return
 		}
@@ -808,7 +712,7 @@ func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 	if a.autopot.hpKeyVK == vk {
 		a.autopot.hpKeyVK = 0
 		a.autopot.hpKeyLabel.SetText("none")
-		a.appendLog(fmt.Sprintf("Key %s removed from HP potion (reassigned)", runner.KeyName(vk)))
+		a.logToFile(fmt.Sprintf("Key %s removed from HP potion (reassigned)", runner.KeyName(vk)))
 		a.syncAutoPotSettings()
 		return
 	}
@@ -816,7 +720,7 @@ func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 	if a.autopot.spKeyVK == vk {
 		a.autopot.spKeyVK = 0
 		a.autopot.spKeyLabel.SetText("none")
-		a.appendLog(fmt.Sprintf("Key %s removed from SP potion (reassigned)", runner.KeyName(vk)))
+		a.logToFile(fmt.Sprintf("Key %s removed from SP potion (reassigned)", runner.KeyName(vk)))
 		a.syncAutoPotSettings()
 		return
 	}
@@ -834,7 +738,7 @@ func (a *guiApp) unsetKeyBindingExceptChain(vk int32, keepSwitch int) {
 			}
 			sw.keyVKs[i] = 0
 			a.keychain.setKeyText(si, i, 0)
-			a.appendLog(fmt.Sprintf("Key %s removed from Switch %d slot %d (reassigned)", runner.KeyName(vk), si+1, i+1))
+			a.logToFile(fmt.Sprintf("Key %s removed from Switch %d slot %d (reassigned)", runner.KeyName(vk), si+1, i+1))
 			cleared = true
 		}
 	}
@@ -847,9 +751,9 @@ func (a *guiApp) syncRunnerSettings() {
 	if a.profileApplying {
 		return
 	}
-	cfg := a.clicker.config(a.appendLog)
+	cfg := a.clicker.config(a.fileLog())
 	a.mu.Lock()
-	r := a.runner
+	r := a.tools.clicker
 	a.mu.Unlock()
 
 	if r != nil && r.Running() {

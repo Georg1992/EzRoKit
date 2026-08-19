@@ -21,19 +21,17 @@ import (
 type addressReader struct {
 	pid          uint32
 	profile      profiles.Profile
-	processTitle string // window title for auto-reconnect
+	processTitle string  // window title for auto-reconnect
 	moduleBase   uintptr // base address of the exe in the target process
 
-	thresholdFn  func() (hpThresh, spThresh int)
-	onParsed     func(hp, hpMax, sp, spMax, stripX, stripY, stripW, stripH int)
-	onModeChange func(string)
+	thresholdFn func() (hpThresh, spThresh int)
 
-	lastLog  time.Time
-	log      func(string)
+	lastLog         time.Time
+	log             func(string)
 	loggedFirstFail bool
 
-	hadError      bool       // true when the last ReadValues returned an error
-	lastReconn    time.Time  // last auto-reconnect attempt time
+	hadError   bool      // true when the last ReadValues returned an error
+	lastReconn time.Time // last auto-reconnect attempt time
 }
 
 // reconnectInterval is how long the reader waits before trying to find
@@ -49,45 +47,47 @@ func (r *addressReader) ReadValues(ctx context.Context) BarReadResult {
 	if r.pid == 0 {
 		return BarReadResult{Status: StatusInvalid, Err: fmt.Errorf("address reader: no process selected (PID=0)")}
 	}
+	if r.moduleBase == 0 {
+		base, err := GetProcessBaseAddr(r.pid)
+		if err != nil {
+			return BarReadResult{Status: StatusInvalid, Err: err, Mode: r.setError("address: GetProcessBaseAddr(%d) failed: %v", r.pid, err)}
+		}
+		r.moduleBase = base
+	}
 
 	h, err := OpenProcessHandle(r.pid)
 	if err != nil {
-		r.setError("address: OpenProcess(%d) failed: %v", r.pid, err)
-		return BarReadResult{Status: StatusInvalid, Err: err}
+		return BarReadResult{Status: StatusInvalid, Err: err, Mode: r.setError("address: OpenProcess(%d) failed: %v", r.pid, err)}
 	}
 	defer CloseProcessHandle(h)
 
 	base := r.moduleBase
 	curHP, maxHP, err := r.readValues(h, base, r.profile.CurrentHPAddr, r.profile.MaxHPAddr)
 	if err != nil {
-		r.setError("address: %v", err)
-		return BarReadResult{Status: StatusInvalid, Err: err}
+		return BarReadResult{Status: StatusInvalid, Err: err, Mode: r.setError("address: %v", err)}
 	}
 	curSP, maxSP, err := r.readValues(h, base, r.profile.CurrentSPAddr, r.profile.MaxSPAddr)
 	if err != nil {
-		r.setError("address: %v", err)
-		return BarReadResult{Status: StatusInvalid, Err: err}
+		return BarReadResult{Status: StatusInvalid, Err: err, Mode: r.setError("address: %v", err)}
 	}
 
-	// All reads succeeded — clear error state and restore normal mode.
+	mode := ""
 	if r.hadError {
 		r.hadError = false
-		if r.onModeChange != nil {
-			r.onModeChange("Address reading")
-		}
+		mode = "Address reading"
 	}
 
 	hpPct, spPct := r.pct(curHP, maxHP, curSP, maxSP)
-
-	if r.onParsed != nil {
-		r.onParsed(int(curHP), int(maxHP), int(curSP), int(maxSP), 0, 0, 0, 0)
-	}
-
 	hpLow, spLow := r.lowFlags(hpPct, spPct)
 	return BarReadResult{
 		HP: hpPct, SP: spPct,
 		HPLow: hpLow, SPLow: spLow,
 		Status: StatusFound,
+		Mode:   mode,
+		Values: &OverlayValues{
+			HP: int(curHP), HPMax: int(maxHP),
+			SP: int(curSP), SPMax: int(maxSP),
+		},
 	}
 }
 
@@ -129,18 +129,15 @@ func (r *addressReader) lowFlags(hpPct, spPct float64) (hpLow, spLow bool) {
 // to "Address err" on first failure, logs the error (rate-limited), and
 // periodically attempts to auto-reconnect to the game process by searching
 // for a visible window whose title matches processTitle.
-func (r *addressReader) setError(format string, args ...interface{}) {
+func (r *addressReader) setError(format string, args ...interface{}) string {
 	now := time.Now()
+	mode := ""
 
-	// First failure after a success — switch overlay to error indicator.
 	if !r.hadError {
 		r.hadError = true
-		if r.onModeChange != nil {
-			r.onModeChange("Address err")
-		}
+		mode = "Address err"
 	}
 
-	// Auto-reconnect: try to find a new PID by window title periodically.
 	if r.pid != 0 && now.Sub(r.lastReconn) >= reconnectInterval {
 		r.lastReconn = now
 
@@ -163,25 +160,20 @@ func (r *addressReader) setError(format string, args ...interface{}) {
 				if r.log != nil {
 					r.log(fmt.Sprintf("address: reconnected to PID %d", newPID))
 				}
-				// Reconnect succeeded — clear error and restore normal mode.
-				// The next ReadValues will open a fresh handle to the new PID.
 				r.hadError = false
 				r.loggedFirstFail = false
-				if r.onModeChange != nil {
-					r.onModeChange("Address reading")
-				}
-				return
+				return "Address reading"
 			}
 		}
 	}
 
-	// Log the error (rate-limited to once per 10s).
 	if r.log == nil {
-		return
+		return mode
 	}
 	if !r.loggedFirstFail || now.Sub(r.lastLog) > 10*time.Second {
 		r.log(fmt.Sprintf(format, args...))
 		r.loggedFirstFail = true
 		r.lastLog = now
 	}
+	return mode
 }
