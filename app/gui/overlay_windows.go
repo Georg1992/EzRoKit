@@ -62,6 +62,8 @@ type statusOverlay struct {
 	valuesSP        int
 	valuesSPMax     int
 	valuesLastPaint time.Time // last InvalidateRect from SetValues; rate-limited to ~5 fps
+
+	lastPanelX, lastPanelY, lastPanelW, lastPanelH int
 }
 
 // newStatusOverlay creates and returns a hidden overlay window.
@@ -211,6 +213,46 @@ func runningText(running bool) string {
 	return "● Tools OFF"
 }
 
+func (o *statusOverlay) sameMode(mode string) bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.hwnd != 0 && o.running && o.mode == mode
+}
+
+func (o *statusOverlay) sameValues(hp, hpMax, sp, spMax int) bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.hwnd != 0 &&
+		o.valuesHP == hp && o.valuesHPMax == hpMax &&
+		o.valuesSP == sp && o.valuesSPMax == spMax
+}
+
+func (o *statusOverlay) samePanelRect(x, y, w, h int) bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.hwnd != 0 &&
+		o.lastPanelX == x && o.lastPanelY == y &&
+		o.lastPanelW == w && o.lastPanelH == h
+}
+
+func (o *statusOverlay) valuesCleared() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.hwnd != 0 && o.valuesHP == 0 && o.valuesHPMax == 0 && o.valuesSP == 0 && o.valuesSPMax == 0
+}
+
 // SetMode updates the mode label shown in the overlay (e.g. "Pixelsearch", "OCR",
 // "Address reading"). Sets running=true. Shows the overlay and repaints immediately.
 // Pass "" to hide the label. Safe from any goroutine.
@@ -294,6 +336,7 @@ func (o *statusOverlay) SetPanelRect(x, y, w, h int) {
 	}
 	o.mu.Lock()
 	hwnd := o.hwnd
+	o.lastPanelX, o.lastPanelY, o.lastPanelW, o.lastPanelH = x, y, w, h
 	o.mu.Unlock()
 	if hwnd == 0 {
 		return

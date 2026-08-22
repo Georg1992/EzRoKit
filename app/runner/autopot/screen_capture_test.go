@@ -30,9 +30,10 @@ func (c *recordingScreenCapturer) CaptureFullScreen() (*image.RGBA, error) {
 func TestPixelReaderUsesInjectedCapture(t *testing.T) {
 	capture := &recordingScreenCapturer{}
 	reader := &pixelBarReader{
-		capture: capture,
-		hpStab:  NewBarStabilizer(true, 50),
-		spStab:  NewBarStabilizer(false, 50),
+		capture:  capture,
+		hpStab:   NewBarStabilizer(true, 50),
+		spStab:   NewBarStabilizer(false, 50),
+		settings: func() AutoPotConfig { return AutoPotConfig{Core: CoreConfig{HPKeyVK: 'Q'}} },
 	}
 
 	result := reader.ReadValues(context.Background())

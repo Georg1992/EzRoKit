@@ -520,14 +520,6 @@ func (a *guiApp) syncAutoPotSettings() {
 		// it doesn't recreate the reader.
 		if cfg.IsAddressMode() != a.autopot.prevAutoPotAddressMode {
 			a.autopot.prevAutoPotAddressMode = cfg.IsAddressMode()
-			a.lifecycleMu.Lock()
-			a.mu.Lock()
-			a.tools.autopot = nil
-			a.mu.Unlock()
-			a.lifecycleMu.Unlock()
-			// Stop the old reader before starting the replacement so
-			// both runners do not overlap on the same session.
-			stopRunnerAsync(r)
 			a.startAutoPotRunner(cfg, a.fileLog())
 			return
 		}
@@ -583,6 +575,9 @@ func (a *guiApp) autopotStatus() runner.StatusSink {
 }
 
 func (s overlayStatusSink) SetMode(mode string) {
+	if s.app.overlay.sameMode(mode) {
+		return
+	}
 	s.app.mainWindow.Synchronize(func() {
 		if s.app.overlay != nil {
 			s.app.overlay.SetMode(mode)
@@ -591,18 +586,28 @@ func (s overlayStatusSink) SetMode(mode string) {
 }
 
 func (s overlayStatusSink) SetValues(v runner.OverlayValues) {
+	sameValues := s.app.overlay.sameValues(v.HP, v.HPMax, v.SP, v.SPMax)
+	movePanel := v.PanelW > 0 && v.PanelH > 0 && !s.app.overlay.samePanelRect(v.PanelX, v.PanelY, v.PanelW, v.PanelH)
+	if sameValues && !movePanel {
+		return
+	}
 	s.app.mainWindow.Synchronize(func() {
 		if s.app.overlay == nil {
 			return
 		}
-		s.app.overlay.SetValues(v.HP, v.HPMax, v.SP, v.SPMax)
-		if v.PanelW > 0 && v.PanelH > 0 {
+		if !sameValues {
+			s.app.overlay.SetValues(v.HP, v.HPMax, v.SP, v.SPMax)
+		}
+		if movePanel {
 			s.app.overlay.SetPanelRect(v.PanelX, v.PanelY, v.PanelW, v.PanelH)
 		}
 	})
 }
 
 func (s overlayStatusSink) ClearValues() {
+	if s.app.overlay.valuesCleared() {
+		return
+	}
 	s.app.mainWindow.Synchronize(func() {
 		if s.app.overlay != nil {
 			s.app.overlay.ClearValues()

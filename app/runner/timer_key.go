@@ -1,4 +1,4 @@
-// TimerKeyRunner fires each enabled slot's key on its interval.
+// TimerKeyRunner fires each mapped slot's key on its interval.
 // Lifecycle driven by internal/lifecycle.
 package runner
 
@@ -19,7 +19,6 @@ const (
 )
 
 type TimerSlot struct {
-	Enabled    bool
 	KeyVK      int32
 	IntervalMs int
 }
@@ -45,22 +44,24 @@ func (c *TimerKeyConfig) applyDefaults() {
 
 func (c TimerKeyConfig) AnyActive() bool {
 	for _, slot := range c.Slots {
-		if slot.Enabled && slot.KeyVK != 0 {
+		if slot.KeyVK != 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// TimerKeyRunner fires each enabled slot on its interval.
+// TimerKeyRunner fires each mapped slot on its interval.
 type TimerKeyRunner struct {
-	lc *lifecycle.Lifecycle[TimerKeyConfig]
+	lc   *lifecycle.Lifecycle[TimerKeyConfig]
+	wake chan struct{}
 }
 
 // NewTimerKey constructs a TimerKeyRunner. Applies defaults.
 func NewTimerKey(cfg TimerKeyConfig) *TimerKeyRunner {
 	cfg.applyDefaults()
 	return &TimerKeyRunner{
+		wake: make(chan struct{}, 1),
 		lc: lifecycle.New[TimerKeyConfig](
 			cfg,
 			func(c TimerKeyConfig) error {
@@ -79,6 +80,13 @@ func NewTimerKey(cfg TimerKeyConfig) *TimerKeyRunner {
 
 func (t *TimerKeyRunner) Running() bool { return t.lc.Running() }
 
+func (t *TimerKeyRunner) poke() {
+	select {
+	case t.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (t *TimerKeyRunner) UpdateSettings(cfg TimerKeyConfig) {
 	// Preserve Log and Session from the existing config — the initial
 	// values use Synchronize-wrapped callbacks and the live session.
@@ -87,6 +95,7 @@ func (t *TimerKeyRunner) UpdateSettings(cfg TimerKeyConfig) {
 	cfg.Session = old.Session
 	cfg.applyDefaults()
 	t.lc.UpdateSettings(cfg)
+	t.poke()
 }
 
 func (t *TimerKeyRunner) settings() TimerKeyConfig { return t.lc.Settings() }
@@ -119,7 +128,7 @@ func (t *TimerKeyRunner) run(ctx context.Context, cfg TimerKeyConfig) {
 
 		for i := range current.Slots {
 			slot := current.Slots[i]
-			if !slot.Enabled || slot.KeyVK == 0 {
+			if slot.KeyVK == 0 {
 				lastSlots[i] = TimerSlot{}
 				nextDue[i] = time.Time{}
 				continue
@@ -149,7 +158,7 @@ func (t *TimerKeyRunner) run(ctx context.Context, cfg TimerKeyConfig) {
 		}
 
 		if !anyActive {
-			timing.Sleep(ctx, timing.CaptureRetryDelay)
+			timing.SleepOr(ctx, t.wake, timing.CaptureRetryDelay)
 			continue
 		}
 
@@ -157,9 +166,6 @@ func (t *TimerKeyRunner) run(ctx context.Context, cfg TimerKeyConfig) {
 		if wait < timing.MinPollWait {
 			wait = timing.MinPollWait
 		}
-		if wait > timing.PollInterval {
-			wait = timing.PollInterval
-		}
-		timing.Sleep(ctx, wait)
+		timing.SleepOr(ctx, t.wake, wait)
 	}
 }

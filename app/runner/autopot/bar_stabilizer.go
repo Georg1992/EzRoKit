@@ -69,14 +69,13 @@ func (s *BarStabilizer) UpdatePair(img image.Image, hpBar bool, mapped MappedBar
 	}
 
 	hp, sp := ReadMappedBars(img, mapped)
-
-	var read BarRead
-	var rect Rect
 	if s.hpBar {
-		read, rect = hp, mapped.HP
-	} else {
-		read, rect = sp, mapped.SP
+		return s.applyFill(img, hp, mapped.HP)
 	}
+	return s.applyFill(img, sp, mapped.SP)
+}
+
+func (s *BarStabilizer) applyFill(img image.Image, read BarRead, rect Rect) StableBarRead {
 	// Each stabiliser checks only its OWN bar. The old code required
 	// BOTH bars to be found (!hp.Found || !sp.Found) which meant a
 	// missing SP bar would reset the HP stabiliser's lowStreak too —

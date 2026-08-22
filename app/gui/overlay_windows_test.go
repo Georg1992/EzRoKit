@@ -291,3 +291,37 @@ func TestOverlayHide(t *testing.T) {
 	// Just ensure it doesn't panic.
 	ovl.Hide()
 }
+
+func TestOverlaySameModeAndValues(t *testing.T) {
+	ovl, err := newStatusOverlay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ovl.Destroy()
+
+	if ovl.sameMode("OCR") {
+		t.Fatal("empty overlay should not report OCR as current")
+	}
+	ovl.SetMode("OCR")
+	if !ovl.sameMode("OCR") {
+		t.Fatal("SetMode(OCR) should match sameMode(OCR)")
+	}
+	if ovl.sameMode("Pixelsearch") {
+		t.Fatal("OCR overlay should not match Pixelsearch")
+	}
+
+	if ovl.sameValues(10, 100, 20, 100) {
+		t.Fatal("empty values should not match")
+	}
+	ovl.SetValues(10, 100, 20, 100)
+	if !ovl.sameValues(10, 100, 20, 100) {
+		t.Fatal("SetValues should match sameValues")
+	}
+	if ovl.sameValues(11, 100, 20, 100) {
+		t.Fatal("changed HP should not match")
+	}
+	ovl.ClearValues()
+	if !ovl.valuesCleared() {
+		t.Fatal("ClearValues should report valuesCleared")
+	}
+}

@@ -34,8 +34,8 @@ func TestTimerKeyRunnerStress(t *testing.T) {
 	r := NewTimerKey(TimerKeyConfig{
 		Session: sess,
 		Slots: [TimerKeySlotCount]TimerSlot{
-			{Enabled: true, KeyVK: 'Q', IntervalMs: 5},
-			{Enabled: true, KeyVK: 'W', IntervalMs: 7},
+			{KeyVK: 'Q', IntervalMs: 5},
+			{KeyVK: 'W', IntervalMs: 7},
 		},
 		Log: func(string) {},
 	})
@@ -60,8 +60,8 @@ func TestTimerKeyRunnerStress(t *testing.T) {
 					r.UpdateSettings(TimerKeyConfig{
 						Session: sess,
 						Slots: [TimerKeySlotCount]TimerSlot{
-							{Enabled: true, KeyVK: 'Q', IntervalMs: 5 + n%20},
-							{Enabled: n%2 == 0, KeyVK: 'W', IntervalMs: 7 + n%20},
+							{KeyVK: 'Q', IntervalMs: 5 + n%20},
+							{KeyVK: int32(n%2) * 'W', IntervalMs: 7 + n%20},
 						},
 						Log: func(string) {},
 					})

@@ -74,3 +74,22 @@ func Sleep(ctx context.Context, d time.Duration) {
 	case <-t.C:
 	}
 }
+
+// SleepOr sleeps for d, returning early if ctx is canceled or wake receives.
+func SleepOr(ctx context.Context, wake <-chan struct{}, d time.Duration) {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+		case <-wake:
+		default:
+		}
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-wake:
+	case <-t.C:
+	}
+}

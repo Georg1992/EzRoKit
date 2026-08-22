@@ -70,7 +70,7 @@ import it from the GUI. The internal packages can move freely
 | `tool_profiles.go` | Persistent profiles for all tool bindings and settings |
 | `tools_host.go` | Shared start/stop registry for the four tool runners |
 | `clicker_tab.go` | Clicker slot rows, trigger-key binding, delay config |
-| `autopot_tab.go` | HP/SP enable, threshold, hotkey binding |
+| `autopot_tab.go` | HP/SP threshold and hotkey binding |
 | `keychain_tab.go` | KeyChain slot rows + hotkey binding |
 | `timer_key_tab.go` | Timer-key slot rows + interval + hotkey binding |
 | `runner_control.go` | Shared helpers: `makeLifecycleSlot`, `startLifecycle`, `bindKeyFlow` |

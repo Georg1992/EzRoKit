@@ -12,7 +12,6 @@ import (
 
 type timerSlotWidgets struct {
 	row          *walk.Composite
-	enabledCB    *walk.CheckBox
 	keyLabel     *walk.Label
 	bindBtn      *walk.PushButton
 	clearBtn     *walk.PushButton
@@ -31,7 +30,6 @@ func (c *timerController) config(logFn func(string)) runner.TimerKeyConfig {
 	cfg := runner.TimerKeyConfig{Log: logFn}
 	for i := 0; i < c.visibleCount; i++ {
 		cfg.Slots[i] = runner.TimerSlot{
-			Enabled:    c.slots[i].enabledCB.Checked(),
 			KeyVK:      c.keyVKs[i],
 			IntervalMs: c.intervalMs(i),
 		}
@@ -40,13 +38,7 @@ func (c *timerController) config(logFn func(string)) runner.TimerKeyConfig {
 }
 
 func (c *timerController) wanted(logFn func(string)) runner.TimerKeyConfig {
-	cfg := c.config(logFn)
-	for i := 0; i < c.visibleCount; i++ {
-		if !cfg.Slots[i].Enabled || cfg.Slots[i].KeyVK == 0 {
-			cfg.Slots[i].Enabled = false
-		}
-	}
-	return cfg
+	return c.config(logFn)
 }
 
 func (c *timerController) intervalMs(index int) int {
@@ -113,7 +105,7 @@ func (a *guiApp) buildTimerKeySection(page *walk.TabPage) error {
 	}
 	a.timer.addBtn.Clicked().Attach(a.onAddTimer)
 
-	if _, err := newHint(timerGB, "Each enabled timer presses its key once every interval. Keyboard only — separate from the clicker above."); err != nil {
+	if _, err := newHint(timerGB, "Each mapped timer presses its key once every interval. Keyboard only — separate from the clicker above."); err != nil {
 		return err
 	}
 
@@ -137,12 +129,6 @@ func (a *guiApp) buildTimerSlotRow(parent walk.Container, index int) error {
 	if _, err := newFieldLabel(row, fmt.Sprintf("Timer %d:", index+1), 55); err != nil {
 		return err
 	}
-
-	w.enabledCB, err = walk.NewCheckBox(row)
-	if err != nil {
-		return err
-	}
-	w.enabledCB.CheckedChanged().Attach(a.syncTimerKeySettings)
 
 	if _, err := newFieldLabel(row, "Key:", 30); err != nil {
 		return err
@@ -246,7 +232,6 @@ func (a *guiApp) syncTimerKeySettings() {
 
 func (a *guiApp) setTimerKeyConfigEnabled(enabled bool) {
 	for i := 0; i < a.timer.visibleCount; i++ {
-		a.timer.slots[i].enabledCB.SetEnabled(enabled)
 		a.timer.slots[i].intervalEdit.SetEnabled(enabled)
 		a.timer.slots[i].bindBtn.SetEnabled(enabled)
 		a.timer.slots[i].clearBtn.SetEnabled(enabled)

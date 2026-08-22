@@ -49,7 +49,6 @@ type timerProfile struct {
 }
 
 type timerProfileSlot struct {
-	Enabled     bool  `json:"enabled"`
 	KeyVK       int32 `json:"key_vk"`
 	IntervalSec int   `json:"interval_sec"`
 }
@@ -308,7 +307,6 @@ func (a *guiApp) captureToolProfile(name string) toolProfile {
 	}
 	for i := range profile.Timer.Slots {
 		profile.Timer.Slots[i] = timerProfileSlot{
-			Enabled:     a.timer.slots[i].enabledCB.Checked(),
 			KeyVK:       a.timer.keyVKs[i],
 			IntervalSec: a.intervalSeconds(i),
 		}
@@ -343,7 +341,6 @@ func (a *guiApp) applyToolProfile(profile toolProfile) {
 	for i := 0; i < runner.TimerKeySlotCount; i++ {
 		slot := profile.Timer.Slots[i]
 		a.timer.keyVKs[i] = slot.KeyVK
-		a.timer.slots[i].enabledCB.SetChecked(slot.Enabled)
 		a.timer.slots[i].intervalEdit.SetText(strconv.Itoa(slot.IntervalSec))
 		a.timer.slots[i].row.SetVisible(i < a.timer.visibleCount)
 		a.timer.slots[i].keyLabel.SetText(keyNameOrNone(slot.KeyVK))

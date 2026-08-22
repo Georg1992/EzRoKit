@@ -55,11 +55,12 @@ type BarReader interface {
 // pixel-based HP/SP reading. Tracks the last known bar position in
 // screen coordinates so the search ROI can follow camera drift.
 type pixelBarReader struct {
-	capture screenCapturer
-	hpStab  *BarStabilizer
-	spStab  *BarStabilizer
-	log     func(string)
-	lastLog time.Time
+	capture  screenCapturer
+	hpStab   *BarStabilizer
+	spStab   *BarStabilizer
+	settings func() AutoPotConfig
+	log      func(string)
+	lastLog  time.Time
 
 	// lastScreenRect is the last known HP bar position in screen
 	// coordinates. Used to centre the next search ROI so the detector
@@ -129,18 +130,19 @@ func (r *pixelBarReader) ReadValues(ctx context.Context) BarReadResult {
 	}
 	r.lostFrames = 0
 
-	hp := r.hpStab.UpdatePair(img, true, mapped, pairOK)
-	sp := r.spStab.UpdatePair(img, false, mapped, pairOK)
+	hpFill, spFill := ReadMappedBars(img, mapped)
+	hp := r.hpStab.applyFill(img, hpFill, mapped.HP)
+	sp := r.spStab.applyFill(img, spFill, mapped.SP)
 	r.debugf("pixel: HP=%.0f%% rect(%d,%d %dx%d) status=%d SP=%.0f%% rect(%d,%d %dx%d) status=%d mapped block(%d,%d %dx%d) score=%d img=%dx%d roi %d,%d %dx%d",
 		hp.Percent, mapped.HP.X, mapped.HP.Y, mapped.HP.W, mapped.HP.H, hp.Status,
 		sp.Percent, mapped.SP.X, mapped.SP.Y, mapped.SP.W, mapped.SP.H, sp.Status,
 		mapped.Block.X, mapped.Block.Y, mapped.Block.W, mapped.Block.H, mapped.MapScore,
 		bounds.Dx(), bounds.Dy(), roi.X, roi.Y, roi.W, roi.H)
 
-	// A pair can be located while one fill measurement is temporarily
-	// inconsistent. Do not expose that partial snapshot to the decision
-	// layer or allow the other bar to trigger a potion from it.
-	if !hp.Found || !sp.Found {
+	cfg := r.settings()
+	hpNeeded := cfg.hpBound()
+	spNeeded := cfg.spBound()
+	if (hpNeeded && !hp.Found) || (spNeeded && !sp.Found) {
 		return BarReadResult{
 			Status: StatusNotFound,
 			Err:    fmt.Errorf("pixel bar fill measurement incomplete (HP found=%t, SP found=%t)", hp.Found, sp.Found),

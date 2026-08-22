@@ -63,10 +63,11 @@ func (f *ReaderFactory) buildVisualReaders(cfg AutoPotConfig) (primary BarReader
 
 func (f *ReaderFactory) buildPixelReader(cfg AutoPotConfig) *pixelBarReader {
 	return &pixelBarReader{
-		capture: f.capture,
-		hpStab:  f.hpStab,
-		spStab:  f.spStab,
-		log:     cfg.Core.Log,
+		capture:  f.capture,
+		hpStab:   f.hpStab,
+		spStab:   f.spStab,
+		settings: f.settings,
+		log:      cfg.Core.Log,
 	}
 }
 

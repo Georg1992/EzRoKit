@@ -236,21 +236,7 @@ func (a *guiApp) startBackgroundMonitors() {
 				return
 			}
 			a.viiperBadge.SetStatus(viiperInactive)
-			if a.isStarted() {
-				a.appendLog("VIIPER server disconnected — stopping tools")
-				a.onStop()
-			}
-			a.mu.Lock()
-			if a.inputSession != nil {
-				a.inputSession.Close()
-				a.inputSession = nil
-			}
-			a.mu.Unlock()
-			stopViiperServerIfStarted()
-			a.startBtn.SetEnabled(false)
-			a.stopBtn.SetEnabled(false)
-			a.setConfigEnabled(false)
-			a.viiperStartBtn.SetEnabled(true)
+			a.onViiperDisconnected()
 		})
 	})
 
@@ -593,6 +579,56 @@ func (a *guiApp) stopStartedRunners() {
 	taken := a.tools.takeAll()
 	a.mu.Unlock()
 	taken.stopAndWait()
+}
+
+// onViiperDisconnected tears down tools, then the input session, then the
+// VIIPER server. Runners must finish before the session is closed so they
+// do not write a dead HID stream.
+func (a *guiApp) onViiperDisconnected() {
+	hadTools := a.isStarted()
+	if hadTools {
+		a.appendLog("VIIPER server disconnected — stopping tools")
+	}
+
+	a.stopping.Store(1)
+	a.lifecycleMu.Lock()
+	a.mu.Lock()
+	taken := a.tools.takeAll()
+	session := a.inputSession
+	a.inputSession = nil
+	a.startupGeneration.Add(1)
+	a.starting.Store(0)
+	if a.startupCancel != nil {
+		a.startupCancel()
+		a.startupCancel = nil
+	}
+	a.mu.Unlock()
+	a.lifecycleMu.Unlock()
+
+	if hadTools {
+		a.setToolsStarted(false)
+	}
+	a.startBtn.SetEnabled(false)
+	a.stopBtn.SetEnabled(false)
+	a.setConfigEnabled(false)
+	a.viiperStartBtn.SetEnabled(true)
+
+	go func() {
+		taken.stopAndWait()
+		if session != nil {
+			session.Close()
+		}
+		stopViiperServerIfStarted()
+		a.mainWindow.Synchronize(func() {
+			if hadTools {
+				a.appendLog("Tools stopped — VIIPER disconnected")
+				if a.overlay != nil {
+					a.overlay.ShowStopped()
+				}
+			}
+			a.stopping.Store(0)
+		})
+	}()
 }
 
 // onStop stops all tools but keeps the VIIPER session alive so the next

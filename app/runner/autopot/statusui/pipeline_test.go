@@ -1,7 +1,6 @@
 package statusui
 
 import (
-	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -21,6 +20,7 @@ func statusKnownCases() map[string]expectedStatus {
 	return map[string]expectedStatus{
 		"aa.png":      {hp: 751, hpMax: 1290, sp: 102, spMax: 201},
 		"gg.png":      {hp: 411, hpMax: 1254, sp: 117, spMax: 195},
+		"ii.png":      {hp: 1254, hpMax: 1254, sp: 195, spMax: 195},
 		"jj.png":      {hp: 120, hpMax: 1290, sp: 6, spMax: 201},
 		"pp.png":      {hp: 1045, hpMax: 1290, sp: 66, spMax: 201},
 		"tt.png":      {hp: 674, hpMax: 1290, sp: 18, spMax: 201},
@@ -69,25 +69,12 @@ func loadPNGImage(t *testing.T, path string) image.Image {
 	return img
 }
 
-func writePNGImage(t *testing.T, path string, img image.Image) {
-	t.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		t.Fatalf("encode %s: %v", path, err)
-	}
-}
-
 func TestPipeline_EndToEnd_FixtureSet(t *testing.T) {
 	pipeline, err := NewPipeline(statusGlyphsDir(t), 0.70)
 	if err != nil {
 		t.Fatalf("NewPipeline: %v", err)
 	}
 
-	outDir := t.TempDir()
 	fixtures := statusKnownCases()
 
 	for name, want := range fixtures {
@@ -123,14 +110,6 @@ func TestPipeline_EndToEnd_FixtureSet(t *testing.T) {
 					got.ParseResult.Text, got.ParseResult.Confidence,
 				)
 			}
-
-			base := name[:len(name)-4]
-			panelPath := filepath.Join(outDir, fmt.Sprintf("%s_panel.png", base))
-			stripPath := filepath.Join(outDir, fmt.Sprintf("%s_strip.png", base))
-			overlayPath := filepath.Join(outDir, fmt.Sprintf("%s_overlay.png", base))
-			writePNGImage(t, panelPath, got.PanelImage)
-			writePNGImage(t, stripPath, got.StripImage)
-			writePNGImage(t, overlayPath, got.OverlayImage)
 		})
 	}
 }
@@ -151,63 +130,6 @@ func TestPipeline_ParseStrip_FromRecognizedStrip(t *testing.T) {
 	}
 	if fromStrip.ParsedStatus != full.ParseResult.ParsedStatus {
 		t.Fatalf("ParseStrip mismatch: strip=%+v full=%+v", fromStrip.ParsedStatus, full.ParseResult.ParsedStatus)
-	}
-}
-
-func TestPipeline_VisualValidation_AAAndII(t *testing.T) {
-	pipeline, err := NewPipeline(statusGlyphsDir(t), 0.70)
-	if err != nil {
-		t.Fatalf("NewPipeline: %v", err)
-	}
-
-	type tc struct {
-		name string
-		hp   int
-		hpMx int
-		sp   int
-		spMx int
-	}
-	cases := []tc{
-		{name: "aa.png", hp: 751, hpMx: 1290, sp: 102, spMx: 201},
-		{name: "ii.png", hp: 1254, hpMx: 1254, sp: 195, spMx: 195},
-	}
-
-	outDir := filepath.Join(statusRootDir(t), "visual_validation", "aa_ii")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", outDir, err)
-	}
-	t.Logf("visual validation outputs: %s", outDir)
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			src := loadPNGImage(t, filepath.Join(statusFixturesDir(t), c.name))
-			got, err := pipeline.RecognizeScreen(src)
-			if err != nil {
-				t.Fatalf("RecognizeScreen(%s): %v", c.name, err)
-			}
-
-			base := c.name[:len(c.name)-4]
-			panelPath := filepath.Join(outDir, fmt.Sprintf("%s_panel.png", base))
-			stripPath := filepath.Join(outDir, fmt.Sprintf("%s_strip.png", base))
-			overlayPath := filepath.Join(outDir, fmt.Sprintf("%s_overlay.png", base))
-
-			if got.PanelImage == nil || got.StripImage == nil || got.OverlayImage == nil {
-				t.Fatalf("%s: missing one or more output images panel=%v strip=%v overlay=%v", c.name, got.PanelImage != nil, got.StripImage != nil, got.OverlayImage != nil)
-			}
-			writePNGImage(t, panelPath, got.PanelImage)
-			writePNGImage(t, stripPath, got.StripImage)
-			writePNGImage(t, overlayPath, got.OverlayImage)
-
-			if got.ParseResult.HP != c.hp || got.ParseResult.HPMax != c.hpMx || got.ParseResult.SP != c.sp || got.ParseResult.SPMax != c.spMx {
-				t.Fatalf("%s: parsed HP=%d/%d SP=%d/%d, want HP=%d/%d SP=%d/%d (text=%q conf=%.4f)",
-					c.name,
-					got.ParseResult.HP, got.ParseResult.HPMax,
-					got.ParseResult.SP, got.ParseResult.SPMax,
-					c.hp, c.hpMx, c.sp, c.spMx,
-					got.ParseResult.Text, got.ParseResult.Confidence,
-				)
-			}
-		})
 	}
 }
 

@@ -1,7 +1,0 @@
-ok=false
-reason=low_glyph_score
-text="\x00<reject>"
-confidence=0.0000
-bounds=(4,0)-(146,5)
-matches:
-  idx=0 char='\x00' score=0.0000 rect=(24,0)-(29,3)

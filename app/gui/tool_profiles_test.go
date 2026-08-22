@@ -22,7 +22,7 @@ func TestToolProfilesRoundTrip(t *testing.T) {
 		Timer: timerProfile{
 			VisibleCount: 1,
 			Slots: [runner.TimerKeySlotCount]timerProfileSlot{
-				{Enabled: true, KeyVK: 0x70, IntervalSec: 7},
+				{KeyVK: 0x70, IntervalSec: 7},
 			},
 		},
 		AutoPot: autoPotProfile{
