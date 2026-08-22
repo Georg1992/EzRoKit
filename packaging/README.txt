@@ -1,5 +1,8 @@
 # EZROKIT
 
+Windows tools for Ragnarok Online (clicker, autopot, keychain, timer keys).
+Designed to work on every Ragnarok server.
+
 
 Install
 -------
