@@ -130,13 +130,17 @@ func (a *AutoPotRunner) mainLoop(ctx context.Context, reader BarReader, pixel *p
 		}
 		controller.markValid()
 
-		if cfg.Core.HPEnabled && result.HPLow {
-			a.healer.healUntilWithInitial(ctx, controller.reader(), true, &result)
-			continue
+		if result.HPLow {
+			if _, ok := healTarget(cfg, true); ok {
+				a.healer.healUntilWithInitial(ctx, controller.reader(), true, &result)
+				continue
+			}
 		}
-		if cfg.Core.SPEnabled && result.SPLow {
-			a.healer.healUntilWithInitial(ctx, controller.reader(), false, &result)
-			continue
+		if result.SPLow {
+			if _, ok := healTarget(cfg, false); ok {
+				a.healer.healUntilWithInitial(ctx, controller.reader(), false, &result)
+				continue
+			}
 		}
 
 		// Recovery is deliberately after normal processing so it cannot

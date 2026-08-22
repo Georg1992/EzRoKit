@@ -13,7 +13,6 @@ func TestAutoPotConfig_AddressModeRequiresPID(t *testing.T) {
 		Core: CoreConfig{
 			Session:   &recordSession{},
 			Log:       func(string) {},
-			HPEnabled: true,
 			HPKeyVK:   'Q',
 		},
 		Address: &AddressConfig{},
@@ -24,11 +23,33 @@ func TestAutoPotConfig_AddressModeRequiresPID(t *testing.T) {
 }
 
 func TestAutoPotConfig_HasBoundPotion(t *testing.T) {
-	if (AutoPotConfig{Core: CoreConfig{HPEnabled: true}}).HasBoundPotion() {
-		t.Error("enabled without a key is not a bound potion")
+	if (AutoPotConfig{}).HasBoundPotion() {
+		t.Error("no key assigned is not a bound potion")
 	}
-	if !(AutoPotConfig{Core: CoreConfig{HPEnabled: true, HPKeyVK: 'Q'}}).HasBoundPotion() {
-		t.Error("enabled HP with a key should count as bound")
+	if !(AutoPotConfig{Core: CoreConfig{HPKeyVK: 'Q'}}).HasBoundPotion() {
+		t.Error("HP key should count as bound")
+	}
+	if !(AutoPotConfig{Core: CoreConfig{SPKeyVK: 'W'}}).HasBoundPotion() {
+		t.Error("SP key should count as bound")
+	}
+}
+
+func TestAutoPotConfig_ValidateAllowsSingleBoundPotion(t *testing.T) {
+	session := &recordSession{}
+	logFn := func(string) {}
+
+	hpOnly := AutoPotConfig{Core: CoreConfig{
+		Session: session, Log: logFn, HPKeyVK: 'Q',
+	}}
+	if err := hpOnly.validate(); err != nil {
+		t.Fatalf("HP-only: %v", err)
+	}
+
+	spOnly := AutoPotConfig{Core: CoreConfig{
+		Session: session, Log: logFn, SPKeyVK: 'W',
+	}}
+	if err := spOnly.validate(); err != nil {
+		t.Fatalf("SP-only: %v", err)
 	}
 }
 
@@ -353,7 +374,6 @@ func TestHealUntilWithInitial_UsesSnapshotBeforeReadingAgain(t *testing.T) {
 	sess := &recordSession{}
 	cfg := AutoPotConfig{Core: CoreConfig{
 		Session:     sess,
-		HPEnabled:   true,
 		HPKeyVK:     'Q',
 		HPThreshold: 50,
 		Log:         func(string) {},
@@ -371,6 +391,78 @@ func TestHealUntilWithInitial_UsesSnapshotBeforeReadingAgain(t *testing.T) {
 	}
 	if reader.calls != 1 {
 		t.Fatalf("expected one post-tap read, got %d (initial snapshot was reread)", reader.calls)
+	}
+}
+
+// lowHPRisingSPReader keeps HP below threshold and walks SP up so the
+// main loop must heal SP even while the unbound HP bar stays low.
+type lowHPRisingSPReader struct {
+	mu        sync.Mutex
+	spValues  []float64
+	callCount int
+}
+
+func (r *lowHPRisingSPReader) ReadValues(_ context.Context) BarReadResult {
+	r.mu.Lock()
+	idx := r.callCount
+	if idx >= len(r.spValues) {
+		idx = len(r.spValues) - 1
+	}
+	sp := r.spValues[idx]
+	r.callCount++
+	r.mu.Unlock()
+	return BarReadResult{
+		Status: StatusFound,
+		HP:     20,
+		SP:     sp,
+		HPLow:  true,
+		SPLow:  sp < 50,
+	}
+}
+
+func (r *lowHPRisingSPReader) Name() string { return "lowHPRisingSP" }
+
+func TestMainLoop_HealsSPWhenOnlySPBound(t *testing.T) {
+	sess := &recordSession{}
+	cfg := AutoPotConfig{Core: CoreConfig{
+		Session:     sess,
+		HPThreshold: 50,
+		SPThreshold: 50,
+		SPKeyVK:     'W',
+		Log:         func(string) {},
+	}}
+	ap := NewAutoPot(cfg)
+	reader := &lowHPRisingSPReader{spValues: []float64{20, 20, 80}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ap.mainLoop(ctx, reader, nil, nil, true)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		sess.mu.Lock()
+		keys := append([]int32(nil), sess.tapKeys...)
+		sess.mu.Unlock()
+		if len(keys) > 0 {
+			for _, vk := range keys {
+				if vk != 'W' {
+					t.Fatalf("tapped VK 0x%02X, want only SP key W", vk)
+				}
+			}
+			cancel()
+			<-done
+			return
+		}
+		if !time.Now().Before(deadline) {
+			cancel()
+			<-done
+			t.Fatal("main loop never tapped the SP key while HP stayed low and unbound")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

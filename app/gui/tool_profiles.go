@@ -55,8 +55,6 @@ type timerProfileSlot struct {
 }
 
 type autoPotProfile struct {
-	HPEnabled      bool   `json:"hp_enabled"`
-	SPEnabled      bool   `json:"sp_enabled"`
 	HPThreshold    int    `json:"hp_threshold"`
 	SPThreshold    int    `json:"sp_threshold"`
 	HPKeyVK        int32  `json:"hp_key_vk"`
@@ -291,8 +289,6 @@ func (a *guiApp) captureToolProfile(name string) toolProfile {
 		Clicker: clickerProfile{VisibleCount: a.clicker.visibleCount},
 		Timer:   timerProfile{VisibleCount: a.timer.visibleCount},
 		AutoPot: autoPotProfile{
-			HPEnabled:      a.autopot.hpEnabledCB.Checked(),
-			SPEnabled:      a.autopot.spEnabledCB.Checked(),
 			HPThreshold:    a.autopot.hpThreshold,
 			SPThreshold:    a.autopot.spThreshold,
 			HPKeyVK:        a.autopot.hpKeyVK,
@@ -354,8 +350,6 @@ func (a *guiApp) applyToolProfile(profile toolProfile) {
 	}
 	a.updateTimerAddButton()
 
-	a.autopot.hpEnabledCB.SetChecked(profile.AutoPot.HPEnabled)
-	a.autopot.spEnabledCB.SetChecked(profile.AutoPot.SPEnabled)
 	a.autopot.hpThreshold = profile.AutoPot.HPThreshold
 	a.autopot.spThreshold = profile.AutoPot.SPThreshold
 	a.autopot.hpThresholdEdit.SetText(strconv.Itoa(profile.AutoPot.HPThreshold))

@@ -12,8 +12,6 @@ import (
 
 // autopotController owns autopot state and config building.
 type autopotController struct {
-	hpEnabledCB     *walk.CheckBox
-	spEnabledCB     *walk.CheckBox
 	hpThresholdEdit *walk.LineEdit
 	spThresholdEdit *walk.LineEdit
 	hpKeyLabel      *walk.Label
@@ -105,8 +103,6 @@ func (c *autopotController) config(status runner.StatusSink, logFn func(string))
 			SPKeyVK:     c.spKeyVK,
 			HPKeyName:   hpName,
 			SPKeyName:   spName,
-			HPEnabled:   c.hpEnabledCB.Checked(),
-			SPEnabled:   c.spEnabledCB.Checked(),
 			Log:         logFn,
 			Status:      status,
 		},
@@ -308,7 +304,6 @@ func (a *guiApp) buildAddressControls(modeGB *walk.GroupBox) error {
 type potionSectionConfig struct {
 	title            string
 	defaultThreshold int
-	enabledCB        **walk.CheckBox
 	thresholdEdit    **walk.LineEdit
 	keyLabel         **walk.Label
 	bindBtn          **walk.PushButton
@@ -319,8 +314,8 @@ type potionSectionConfig struct {
 	commitThresh     func()
 }
 
-// buildPotionSection creates a potion (HP/SP) group box with enable checkbox,
-// threshold input, key label, bind button, and clear button. Two thin wrappers
+// buildPotionSection creates a potion (HP/SP) group box with threshold
+// input, key label, bind button, and clear button. Two thin wrappers
 // (buildHPPotionSection / buildSPPotionSection) call this with the right config.
 func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig) error {
 	gb, err := walk.NewGroupBox(page)
@@ -335,16 +330,6 @@ func (a *guiApp) buildPotionSection(page *walk.TabPage, cfg potionSectionConfig)
 	if err := gb.SetLayout(layout); err != nil {
 		return err
 	}
-
-	*cfg.enabledCB, err = walk.NewCheckBox(gb)
-	if err != nil {
-		return err
-	}
-	if err := (*cfg.enabledCB).SetText("Enabled"); err != nil {
-		return err
-	}
-	(*cfg.enabledCB).SetChecked(true)
-	(*cfg.enabledCB).CheckedChanged().Attach(a.syncAutoPotSettings)
 
 	if _, err := newFieldLabel(gb, "Trigger below %:", 100); err != nil {
 		return err
@@ -403,7 +388,6 @@ func (a *guiApp) buildHPPotionSection(page *walk.TabPage) error {
 	return a.buildPotionSection(page, potionSectionConfig{
 		title:            "HP potion",
 		defaultThreshold: 50,
-		enabledCB:        &a.autopot.hpEnabledCB,
 		thresholdEdit:    &a.autopot.hpThresholdEdit,
 		keyLabel:         &a.autopot.hpKeyLabel,
 		bindBtn:          &a.autopot.hpBindBtn,
@@ -420,7 +404,6 @@ func (a *guiApp) buildSPPotionSection(page *walk.TabPage) error {
 	return a.buildPotionSection(page, potionSectionConfig{
 		title:            "SP potion",
 		defaultThreshold: 30,
-		enabledCB:        &a.autopot.spEnabledCB,
 		thresholdEdit:    &a.autopot.spThresholdEdit,
 		keyLabel:         &a.autopot.spKeyLabel,
 		bindBtn:          &a.autopot.spBindBtn,
@@ -562,8 +545,6 @@ func (a *guiApp) syncAutoPotSettings() {
 }
 
 func (a *guiApp) setAutoPotConfigEnabled(enabled bool) {
-	a.autopot.hpEnabledCB.SetEnabled(enabled)
-	a.autopot.spEnabledCB.SetEnabled(enabled)
 	a.autopot.hpThresholdEdit.SetEnabled(enabled)
 	a.autopot.spThresholdEdit.SetEnabled(enabled)
 	a.autopot.hpBindBtn.SetEnabled(enabled)

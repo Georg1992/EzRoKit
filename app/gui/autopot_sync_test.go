@@ -36,7 +36,6 @@ func TestRunningRunnerReceivesThresholdUpdate(t *testing.T) {
 	mock := &mockAutoPotRunner{running: true}
 	cfg := runner.AutoPotConfig{
 		Core: runner.CoreConfig{
-			HPEnabled:   true,
 			HPKeyVK:     'W',
 			HPThreshold: 60,
 			SPThreshold: 50,

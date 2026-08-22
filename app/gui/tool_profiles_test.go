@@ -26,7 +26,7 @@ func TestToolProfilesRoundTrip(t *testing.T) {
 			},
 		},
 		AutoPot: autoPotProfile{
-			HPEnabled: true, SPThreshold: 30, HPThreshold: 42, HPKeyVK: 0x71,
+			SPThreshold: 30, HPThreshold: 42, HPKeyVK: 0x71,
 			AddressMode: true, AddressProfile: "Revenant", WindowTitle: "Game",
 		},
 		KeyChain: keyChainProfile{

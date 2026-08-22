@@ -43,8 +43,6 @@ func TestAutoPotRunnerStress(t *testing.T) {
 			SPThreshold: 50,
 			HPKeyVK:     'Q',
 			SPKeyVK:     'W',
-			HPEnabled:   true,
-			SPEnabled:   true,
 			Log:         func(string) {},
 		},
 	}
@@ -72,8 +70,6 @@ func TestAutoPotRunnerStress(t *testing.T) {
 							SPThreshold: 40 + n%40,
 							HPKeyVK:     'Q',
 							SPKeyVK:     'W',
-							HPEnabled:   n%2 == 0,
-							SPEnabled:   true,
 							Log:         func(string) {},
 						},
 					})
@@ -160,7 +156,6 @@ func TestAutoPotHealUntilErrorAborts(t *testing.T) {
 			Session:     sess,
 			HPThreshold: 50,
 			HPKeyVK:     'Q',
-			HPEnabled:   true,
 			Log:         func(string) {},
 		},
 	}
@@ -201,7 +196,6 @@ func TestAutoPotHealUntilSucceeds(t *testing.T) {
 			Session:     sess,
 			HPThreshold: 50,
 			HPKeyVK:     'Q',
-			HPEnabled:   true,
 			Log:         func(string) {},
 		},
 	}
@@ -278,8 +272,6 @@ func TestAutoPotRunnerRunWithMockReader(t *testing.T) {
 			SPThreshold: 50,
 			HPKeyVK:     'Q',
 			SPKeyVK:     'W',
-			HPEnabled:   true,
-			SPEnabled:   true,
 			Log:         func(string) {},
 		},
 	}
@@ -340,8 +332,6 @@ func TestAutoPotRunnerRunWithMockReader(t *testing.T) {
 							SPThreshold: 10 + n%80,
 							HPKeyVK:     'Q',
 							SPKeyVK:     'W',
-							HPEnabled:   n%3 != 0,
-							SPEnabled:   n%3 != 1,
 							Log:         func(string) {},
 						},
 					})

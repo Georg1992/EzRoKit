@@ -17,8 +17,6 @@ type CoreConfig struct {
 	SPKeyVK     int32
 	HPKeyName   string // human-readable key name for overlay (e.g. "F1")
 	SPKeyName   string
-	HPEnabled   bool
-	SPEnabled   bool
 	Log         func(string)
 	Status      StatusSink
 }
@@ -51,6 +49,7 @@ func (c AutoPotConfig) IsAddressMode() bool {
 }
 
 // validate checks that required fields are present.
+// HP and SP are independent: a single mapped potion is enough to start.
 func (c AutoPotConfig) validate() error {
 	if c.Core.Session == nil {
 		return fmt.Errorf("input session is required")
@@ -58,19 +57,21 @@ func (c AutoPotConfig) validate() error {
 	if c.Core.Log == nil {
 		return fmt.Errorf("log callback is required")
 	}
-	if c.Core.HPEnabled && c.Core.HPKeyVK == 0 {
-		return fmt.Errorf("HP potion key is not set")
-	}
-	if c.Core.SPEnabled && c.Core.SPKeyVK == 0 {
-		return fmt.Errorf("SP potion key is not set")
-	}
 	if c.Address != nil && c.Address.ProcessPID == 0 {
 		return fmt.Errorf("address mode: no game window selected")
 	}
 	return nil
 }
 
-// HasBoundPotion reports whether at least one bar is enabled with a key.
+func (c AutoPotConfig) hpBound() bool {
+	return c.Core.HPKeyVK != 0
+}
+
+func (c AutoPotConfig) spBound() bool {
+	return c.Core.SPKeyVK != 0
+}
+
+// HasBoundPotion reports whether at least one potion key is assigned.
 func (c AutoPotConfig) HasBoundPotion() bool {
-	return (c.Core.HPEnabled && c.Core.HPKeyVK != 0) || (c.Core.SPEnabled && c.Core.SPKeyVK != 0)
+	return c.hpBound() || c.spBound()
 }

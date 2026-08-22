@@ -207,8 +207,6 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 			SPThreshold: 50,
 			HPKeyVK:     'Q',
 			SPKeyVK:     'W',
-			HPEnabled:   true,
-			SPEnabled:   true,
 			Log:         func(string) {},
 		},
 	})
@@ -241,8 +239,6 @@ func TestClickerAndAutoPotConcurrent(t *testing.T) {
 							SPThreshold: 40 + n%40,
 							HPKeyVK:     'Q',
 							SPKeyVK:     'W',
-							HPEnabled:   n%2 == 0,
-							SPEnabled:   true,
 							Log:         func(string) {},
 						},
 					})

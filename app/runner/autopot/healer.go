@@ -177,12 +177,12 @@ func absPctDiff(a, b float64) float64 {
 
 func healTarget(cfg AutoPotConfig, hpBar bool) (vk int32, ok bool) {
 	if hpBar {
-		if !cfg.Core.HPEnabled || cfg.Core.HPKeyVK == 0 {
+		if !cfg.hpBound() {
 			return 0, false
 		}
 		return cfg.Core.HPKeyVK, true
 	}
-	if !cfg.Core.SPEnabled || cfg.Core.SPKeyVK == 0 {
+	if !cfg.spBound() {
 		return 0, false
 	}
 	return cfg.Core.SPKeyVK, true
